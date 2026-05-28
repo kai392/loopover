@@ -651,6 +651,32 @@ describe("GitHub backfill", () => {
     expect(await listRepoLabels(env, "JSONbored/gittensory")).toEqual([expect.objectContaining({ name: "signal" })]);
   });
 
+  it("does not let unauthenticated fallback rate limits poison the authenticated REST backoff", async () => {
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
+    await upsertRepositoryFromGitHub(env, {
+      name: "gittensory",
+      full_name: "JSONbored/gittensory",
+      private: false,
+      default_branch: "main",
+      owner: { login: "JSONbored" },
+    });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const auth = new Headers(init?.headers).get("authorization");
+      if (url === "https://api.github.com/graphql") return githubTotalsResponse({ openIssues: 0, openPullRequests: 0, mergedPullRequests: 0, closedPullRequests: 0, labels: 1 });
+      if (url.includes("/labels?") && auth === "Bearer public-token") return new Response("", { status: 404 });
+      if (url.includes("/labels?")) return new Response("limited", { status: 403, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1779976046" } });
+      return new Response("not found", { status: 404 });
+    });
+
+    const result = await backfillRepositorySegment(env, { repoFullName: "JSONbored/gittensory", segment: "labels", mode: "full" });
+
+    expect(result).toMatchObject({ status: "waiting_rate_limit", fetchedCount: 0 });
+    expect(await listLatestGitHubRateLimitObservations(env)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: expect.stringContaining("/labels?"), statusCode: 403, remaining: 0 })]),
+    );
+  });
+
   it("paginates beyond the first GitHub page and stores complete segment fidelity", async () => {
     const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "public-token" });
     await seedRegisteredRepo(env);

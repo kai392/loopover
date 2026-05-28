@@ -67,5 +67,9 @@
 
 - Fall back from scoped public token 404s
 
+- Hydrate public repo gaps through graphql
+
+- Recover public repo detail gaps
+
 
 

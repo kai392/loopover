@@ -1770,7 +1770,7 @@ async function githubJsonWithHeaders<T>(
   await recordGitHubResponse(env, repoFullName, path, response, "rest");
   if (response.status === 404 && token && token === env.GITHUB_PUBLIC_TOKEN) {
     response = await fetch(url, { headers: githubRestHeaders() });
-    await recordGitHubResponse(env, repoFullName, path, response, "rest");
+    if (response.status !== 403) await recordGitHubResponse(env, repoFullName, path, response, "rest");
   }
   if (!response.ok) {
     const body = await response.text();
