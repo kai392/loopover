@@ -28,6 +28,21 @@ type OperatorDashboard = {
       githubActivatedRepos: number;
     };
   }>;
+  mcpCompatibilityAdoption?: {
+    totalEvents: number;
+    activeActors: number;
+    staleEvents: number;
+    incompatibleEvents: number;
+    minimumSupportedVersion: string;
+    latestRecommendedVersion: string;
+    truncated: boolean;
+    byClientVersion: Array<{ key: string; count: number }>;
+    byProtocolVersion: Array<{ key: string; count: number }>;
+    byCompatibilityStatus: Array<{
+      status: "current" | "stale" | "incompatible" | "unknown";
+      count: number;
+    }>;
+  };
 };
 
 function ProductAnalytics() {
@@ -114,6 +129,80 @@ function ProductAnalytics() {
             </div>
           </section>
 
+          {data.mcpCompatibilityAdoption ? (
+            <section className="rounded-token border border-border bg-transparent p-5">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="font-display text-token-lg font-semibold">
+                    MCP compatibility adoption
+                  </h2>
+                  <p className="mt-1 text-token-xs text-muted-foreground">
+                    Version distribution from redacted MCP product events.
+                  </p>
+                </div>
+                <StatusPill
+                  status={
+                    data.mcpCompatibilityAdoption.incompatibleEvents > 0
+                      ? "degraded"
+                      : data.mcpCompatibilityAdoption.staleEvents > 0
+                        ? "info"
+                        : "ready"
+                  }
+                >
+                  {data.mcpCompatibilityAdoption.latestRecommendedVersion}
+                </StatusPill>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Stat
+                  label="MCP events"
+                  value={String(data.mcpCompatibilityAdoption.totalEvents)}
+                  hint={<span className="text-muted-foreground">last 7 days</span>}
+                />
+                <Stat
+                  label="Active clients"
+                  value={String(data.mcpCompatibilityAdoption.activeActors)}
+                  hint={<span className="text-muted-foreground">hashed actors</span>}
+                />
+                <Stat
+                  label="Stale clients"
+                  value={String(data.mcpCompatibilityAdoption.staleEvents)}
+                  hint={<span className="text-muted-foreground">upgrade available</span>}
+                />
+                <Stat
+                  label="Unsupported"
+                  value={String(data.mcpCompatibilityAdoption.incompatibleEvents)}
+                  hint={
+                    <span className="text-muted-foreground">
+                      min {data.mcpCompatibilityAdoption.minimumSupportedVersion}
+                    </span>
+                  }
+                />
+              </div>
+              <div className="mt-4 grid gap-4 lg:grid-cols-3">
+                <CompatibilityList
+                  title="Client versions"
+                  rows={data.mcpCompatibilityAdoption.byClientVersion}
+                />
+                <CompatibilityList
+                  title="Protocol versions"
+                  rows={data.mcpCompatibilityAdoption.byProtocolVersion}
+                />
+                <CompatibilityList
+                  title="Compatibility"
+                  rows={data.mcpCompatibilityAdoption.byCompatibilityStatus.map((row) => ({
+                    key: row.status,
+                    count: row.count,
+                  }))}
+                />
+              </div>
+              {data.mcpCompatibilityAdoption.truncated ? (
+                <p className="mt-3 text-token-xs text-muted-foreground">
+                  Displayed distribution is capped to keep dashboard reads bounded.
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
           {data.usageRollups && data.usageRollups.length > 0 ? (
             <section className="rounded-token border border-border bg-transparent p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -164,5 +253,31 @@ function ProductAnalytics() {
         </div>
       ) : null}
     </StateBoundary>
+  );
+}
+
+function CompatibilityList({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ key: string; count: number }>;
+}) {
+  return (
+    <div className="rounded-token border border-border bg-background/40 p-3">
+      <div className="text-token-xs font-medium uppercase text-muted-foreground">{title}</div>
+      <div className="mt-3 space-y-2">
+        {rows.length > 0 ? (
+          rows.slice(0, 5).map((row) => (
+            <div key={row.key} className="flex items-center justify-between gap-3 text-token-sm">
+              <span className="min-w-0 truncate font-mono text-token-xs">{row.key}</span>
+              <span className="font-mono text-mint">{row.count}</span>
+            </div>
+          ))
+        ) : (
+          <div className="text-token-xs text-muted-foreground">No events</div>
+        )}
+      </div>
+    </div>
   );
 }

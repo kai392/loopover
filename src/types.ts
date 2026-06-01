@@ -898,6 +898,23 @@ export type ProductUsageSummary = {
   byEvent: Array<{ eventName: string; count: number }>;
 };
 
+export type McpCompatibilityAdoptionSummary = {
+  since?: string | null | undefined;
+  totalEvents: number;
+  activeActors: number;
+  activeSessions: number;
+  scannedEvents: number;
+  scanLimit: number;
+  truncated: boolean;
+  minimumSupportedVersion: string;
+  latestRecommendedVersion: string;
+  staleEvents: number;
+  incompatibleEvents: number;
+  byClientVersion: ProductUsageDimensionCount[];
+  byProtocolVersion: ProductUsageDimensionCount[];
+  byCompatibilityStatus: Array<{ status: "current" | "stale" | "incompatible" | "unknown"; count: number }>;
+};
+
 export type ProductUsageDailyRollupStatus = "complete" | "partial" | "incomplete";
 
 export type ProductUsageDimensionCount = {

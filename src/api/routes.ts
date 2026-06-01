@@ -73,6 +73,7 @@ import {
   persistSignalSnapshot,
   recordProductUsageEvent,
   rollupProductUsageDaily,
+  summarizeMcpCompatibilityAdoption,
   summarizeProductUsageEvents,
   upsertDigestSubscription,
   upsertBounty,
@@ -106,6 +107,7 @@ import {
   preflightBranchWithAgent,
   startAgentRun,
 } from "../services/agent-orchestrator";
+import { buildMcpClientTelemetry } from "../services/client-telemetry";
 import {
   buildAndPersistContributorDecisionPack,
   loadContributorDecisionPackForServing,
@@ -186,6 +188,7 @@ async function recordRouteProductUsage(
     metadata?: Record<string, unknown> | null | undefined;
   },
 ): Promise<void> {
+  const telemetry = buildMcpClientTelemetry(c.req.raw.headers, { requireGittensoryHeader: true });
   await recordProductUsageEvent(c.env, {
     surface: event.surface,
     eventName: event.eventName,
@@ -196,9 +199,9 @@ async function recordRouteProductUsage(
     targetKey: event.targetKey,
     outcome: event.outcome,
     latencyMs: event.latencyMs,
-    clientName: event.clientName,
-    clientVersion: event.clientVersion,
-    metadata: event.metadata,
+    clientName: event.clientName ?? telemetry?.clientName,
+    clientVersion: event.clientVersion ?? telemetry?.clientVersion,
+    metadata: telemetry ? Object.assign({}, event.metadata, telemetry.metadata) : event.metadata,
   }).catch(() => undefined);
 }
 
@@ -755,7 +758,21 @@ export function createApp() {
     const forbidden = await requireAppRole(c, ["operator"]);
     if (forbidden) return forbidden;
     const usageSince = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const [repositories, installations, health, registry, scoring, upstreamDrift, activeSessions, digestSubscriptions, rateLimits, usageSummary, usageRollups, usageRollupStatus] = await Promise.all([
+    const [
+      repositories,
+      installations,
+      health,
+      registry,
+      scoring,
+      upstreamDrift,
+      activeSessions,
+      digestSubscriptions,
+      rateLimits,
+      usageSummary,
+      usageRollups,
+      usageRollupStatus,
+      mcpCompatibilityAdoption,
+    ] = await Promise.all([
       listRepositories(c.env),
       listInstallations(c.env),
       listInstallationHealth(c.env),
@@ -768,6 +785,7 @@ export function createApp() {
       summarizeProductUsageEvents(c.env, usageSince),
       listProductUsageDailyRollups(c.env, { limit: 14 }),
       getProductUsageRollupStatus(c.env),
+      summarizeMcpCompatibilityAdoption(c.env, usageSince),
     ]);
     const installedRepos = repositories.filter((repo) => repo.isInstalled).length;
     const registeredRepos = repositories.filter((repo) => repo.isRegistered).length;
@@ -781,6 +799,7 @@ export function createApp() {
         { label: "Product events", value: String(usageSummary.totalEvents), delta: "last 7 days" },
         { label: "Active users", value: String(usageSummary.activeActors), delta: "hashed, last 7 days" },
         { label: "Activation rollups", value: usageRollupStatus.status, delta: usageRollupStatus.latestRollupDay ?? "not generated" },
+        { label: "MCP stale clients", value: String(mcpCompatibilityAdoption.staleEvents + mcpCompatibilityAdoption.incompatibleEvents), delta: `${mcpCompatibilityAdoption.totalEvents} MCP event(s)` },
         { label: "Install issues", value: String(health.filter((record) => record.status !== "healthy").length), delta: "current health cache" },
         { label: "Rate-limit events", value: String(rateLimits.length), delta: "latest observations" },
       ],
@@ -793,10 +812,19 @@ export function createApp() {
       usageSummary,
       usageRollups,
       usageRollupStatus,
+      mcpCompatibilityAdoption,
       registry,
       scoringModel: scoring,
       upstreamDrift,
     });
+  });
+
+  app.get("/v1/app/analytics/mcp-compatibility", async (c) => {
+    const forbidden = await requireAppRole(c, ["operator"]);
+    if (forbidden) return forbidden;
+    const days = Math.max(1, Math.min(90, Number(c.req.query("days") ?? 7) || 7));
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    return c.json({ generatedAt: nowIso(), days, adoption: await summarizeMcpCompatibilityAdoption(c.env, since) });
   });
 
   app.get("/v1/app/analytics/daily-rollups", async (c) => {

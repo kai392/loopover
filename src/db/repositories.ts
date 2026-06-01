@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, not, sql } from "drizzle-orm";
+import { and, desc, eq, gte, not, or, sql } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   advisories,
@@ -80,6 +80,7 @@ import type {
   IssueRecord,
   IssueQualityReportRecord,
   JsonValue,
+  McpCompatibilityAdoptionSummary,
   ProductUsageActivationFunnel,
   ProductUsageDailyRollupRecord,
   ProductUsageDailyRollupStatus,
@@ -115,6 +116,7 @@ import type {
   UpstreamSourceStatus,
 } from "../types";
 import type { GittensorContributorSnapshot, OfficialGittensorMinerDetection } from "../gittensor/api";
+import { classifyMcpClientVersion, LATEST_RECOMMENDED_MCP_VERSION, MINIMUM_SUPPORTED_MCP_VERSION } from "../services/mcp-compatibility";
 import { sha256Hex } from "../utils/crypto";
 import { jsonString, nowIso, parseJson, repoParts } from "../utils/json";
 
@@ -1075,6 +1077,45 @@ export async function summarizeProductUsageEvents(env: Env, sinceIso?: string): 
     bySurface: bySurfaceRows.map((row) => ({ surface: normalizeProductUsageSurface(row.surface), count: Number(row.count ?? 0) })),
     byOutcome: byOutcomeRows.map((row) => ({ outcome: normalizeProductUsageOutcome(row.outcome), count: Number(row.count ?? 0) })),
     byEvent: byEventRows.map((row) => ({ eventName: row.eventName, count: Number(row.count ?? 0) })),
+  };
+}
+
+export async function summarizeMcpCompatibilityAdoption(
+  env: Env,
+  sinceIso?: string,
+  options: { limit?: number } = {},
+): Promise<McpCompatibilityAdoptionSummary> {
+  const db = getDb(env.DB);
+  const limit = Math.max(1, Math.min(MCP_COMPATIBILITY_ADOPTION_SCAN_LIMIT, Math.round(options.limit ?? MCP_COMPATIBILITY_ADOPTION_SCAN_LIMIT)));
+  const mcpClientWhere = or(eq(productUsageEvents.surface, "mcp"), eq(productUsageEvents.clientName, "gittensory-mcp"), eq(productUsageEvents.clientName, "gittensory-mcp-cli"));
+  const baseWhere = sinceIso ? and(mcpClientWhere, gte(productUsageEvents.occurredAt, sinceIso)) : mcpClientWhere;
+  const [totalRow] = await db.select({ count: sql<number>`count(*)` }).from(productUsageEvents).where(baseWhere);
+  const [activeActorRow] = await db
+    .select({ count: sql<number>`count(distinct ${productUsageEvents.actorHash})` })
+    .from(productUsageEvents)
+    .where(and(baseWhere, sql`${productUsageEvents.actorHash} is not null`));
+  const [activeSessionRow] = await db
+    .select({ count: sql<number>`count(distinct ${productUsageEvents.sessionHash})` })
+    .from(productUsageEvents)
+    .where(and(baseWhere, sql`${productUsageEvents.sessionHash} is not null`));
+  const rows = await db.select().from(productUsageEvents).where(baseWhere).orderBy(desc(productUsageEvents.occurredAt)).limit(limit + 1);
+  const events = rows.slice(0, limit).map(toProductUsageEventRecord);
+  const compatibilityStatuses = events.map(mcpCompatibilityStatusForEvent);
+  return {
+    since: sinceIso,
+    totalEvents: Number(totalRow?.count ?? 0),
+    activeActors: Number(activeActorRow?.count ?? 0),
+    activeSessions: Number(activeSessionRow?.count ?? 0),
+    scannedEvents: events.length,
+    scanLimit: limit,
+    truncated: rows.length > limit || Number(totalRow?.count ?? 0) > limit,
+    minimumSupportedVersion: MINIMUM_SUPPORTED_MCP_VERSION,
+    latestRecommendedVersion: LATEST_RECOMMENDED_MCP_VERSION,
+    staleEvents: compatibilityStatuses.filter((status) => status === "stale").length,
+    incompatibleEvents: compatibilityStatuses.filter((status) => status === "incompatible").length,
+    byClientVersion: countProductUsageDimensions(events.map(mcpClientVersionForEvent)),
+    byProtocolVersion: countProductUsageDimensions(events.map((event) => productUsageMetadataString(event, "protocolVersion") ?? "unknown")),
+    byCompatibilityStatus: countProductUsageDimensions(compatibilityStatuses).map(({ key, count }) => ({ status: normalizeMcpCompatibilityStatus(key), count })),
   };
 }
 
@@ -2931,12 +2972,12 @@ function boundedProductUsageField(value: unknown, maxLength: number): string | n
 
 function buildProductUsageActorRedactor(actor: unknown): RegExp | null {
   const normalized = typeof actor === "string" ? actor.trim() : "";
-  if (normalized.length < 4) return null;
-  return new RegExp(escapeRegExp(normalized), "gi");
+  if (!normalized || normalized.length > PRODUCT_USAGE_ACTOR_REDACTION_MAX_CHARS) return null;
+  return new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(normalized)}(?=$|[^A-Za-z0-9])`, "gi");
 }
 
 function redactProductUsageActor(value: string | null, actorRedactor: RegExp | null): string | null {
-  return value && actorRedactor ? value.replace(actorRedactor, "<redacted-actor>") : value;
+  return value && actorRedactor ? value.replace(actorRedactor, "$1<redacted-actor>") : value;
 }
 
 function escapeRegExp(value: string): string {
@@ -3094,6 +3135,20 @@ function isProductUsageUsefulMaintainerEvent(event: ProductUsageEventRecord): bo
   return event.eventName === "agent_command_replied" && productUsageMetadataString(event, "actorKind") === "maintainer" && event.outcome === "completed";
 }
 
+function mcpClientVersionForEvent(event: ProductUsageEventRecord): string {
+  return event.clientVersion ?? productUsageMetadataString(event, "packageVersion") ?? "unknown";
+}
+
+function mcpCompatibilityStatusForEvent(event: ProductUsageEventRecord): "current" | "stale" | "incompatible" | "unknown" {
+  const metadataStatus = normalizeMcpCompatibilityStatus(productUsageMetadataString(event, "compatibilityStatus"));
+  if (metadataStatus !== "unknown") return metadataStatus;
+  return classifyMcpClientVersion(mcpClientVersionForEvent(event));
+}
+
+function normalizeMcpCompatibilityStatus(value: unknown): "current" | "stale" | "incompatible" | "unknown" {
+  return value === "current" || value === "stale" || value === "incompatible" ? value : "unknown";
+}
+
 function productUsageMetadataString(event: ProductUsageEventRecord, key: string): string | null {
   const value = event.metadata[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -3173,6 +3228,8 @@ const PRODUCT_USAGE_METADATA_MAX_ARRAY_ITEMS = 20;
 const PRODUCT_USAGE_METADATA_MAX_KEY_CHARS = 64;
 const PRODUCT_USAGE_METADATA_MAX_STRING_CHARS = 200;
 const PRODUCT_USAGE_ROLLUP_EVENT_SCAN_LIMIT = 5000;
+const MCP_COMPATIBILITY_ADOPTION_SCAN_LIMIT = 5000;
+const PRODUCT_USAGE_ACTOR_REDACTION_MAX_CHARS = 256;
 const PRODUCT_USAGE_USEFUL_ACTION_EVENTS = new Set([
   "command_previewed",
   "pull_context_viewed",
