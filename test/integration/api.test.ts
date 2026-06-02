@@ -1480,6 +1480,41 @@ describe("api routes", () => {
     expect(minerWithEmptyFit.status).toBe(200);
     await expect(minerWithEmptyFit.json()).resolves.toMatchObject({ status: "ready", repoFit: [] });
 
+    await persistSignalSnapshot(env, {
+      id: "lane-pack",
+      signalType: "contributor-decision-pack",
+      targetKey: "lane-user",
+      payload: {
+        status: "ready",
+        source: "computed",
+        login: "lane-user",
+        generatedAt: new Date().toISOString(),
+        stale: false,
+        freshness: "fresh",
+        rebuildEnqueued: false,
+        scoringModelSnapshotId: "scoring-1",
+        repoDecisions: [],
+        topActions: [],
+        pursueRepos: [{ repoFullName: "owner/pursue", recommendation: "watch" }],
+        cleanupFirst: [{ repoFullName: "owner/cleanup", recommendation: "cleanup_first" }],
+        maintainerLaneRepos: [{ repoFullName: "owner/maintainer", recommendation: "maintainer_lane" }],
+        avoidRepos: [{ repoFullName: "owner/avoid", recommendation: "avoid_for_now" }],
+        scoreBlockers: [],
+        dataQuality: { signalFidelity: { status: "ok" } },
+      } as never,
+      generatedAt: new Date().toISOString(),
+    });
+    const minerWithLaneBuckets = await app.request("/v1/app/miner-dashboard?login=lane-user", { headers: apiHeaders(env) }, env);
+    expect(minerWithLaneBuckets.status).toBe(200);
+    await expect(minerWithLaneBuckets.json()).resolves.toMatchObject({
+      repoFit: expect.arrayContaining([
+        expect.objectContaining({ repoFullName: "owner/pursue", lane: "pursue" }),
+        expect.objectContaining({ repoFullName: "owner/cleanup", lane: "cleanup-first" }),
+        expect.objectContaining({ repoFullName: "owner/maintainer", lane: "maintainer-lane" }),
+        expect.objectContaining({ repoFullName: "owner/avoid", lane: "avoid" }),
+      ]),
+    });
+
     await recordGitHubRateLimitObservation(env, {
       id: "rate-limit-healthy",
       repoFullName: "entrius/allways-ui",
@@ -1914,12 +1949,29 @@ describe("api routes", () => {
       env,
     );
     expect(extensionContext.status).toBe(200);
-    await expect(extensionContext.json()).resolves.toMatchObject({
+    const extensionPayload = (await extensionContext.json()) as {
+      repoFullName: string;
+      pullNumber: number;
+      reviewability: { repoFullName: string; pullNumber: number };
+      actions: Array<{ id: string; markdown?: string; blockers?: Array<{ detail: string }> }>;
+      panels: Array<{ label: string }>;
+    };
+    expect(extensionPayload).toMatchObject({
       repoFullName: "entrius/allways-ui",
       pullNumber: 12,
       reviewability: { repoFullName: "entrius/allways-ui", pullNumber: 12 },
+      actions: expect.arrayContaining([
+        expect.objectContaining({ id: "copy_public_safe_packet", visibility: "public_safe" }),
+        expect.objectContaining({ id: "view_private_blockers", visibility: "private", requiresAuth: true }),
+      ]),
       panels: expect.arrayContaining([expect.objectContaining({ label: "Reviewability" }), expect.objectContaining({ label: "Boundary" })]),
     });
+    const packet = extensionPayload.actions.find((action) => action.id === "copy_public_safe_packet")?.markdown ?? "";
+    expect(packet).toContain("# Public-safe PR packet");
+    expect(packet).not.toMatch(/wallet|hotkey|coldkey|reward estimate|payout|farming|raw trust score|estimated score|score estimate|private reviewability/i);
+    const blockers = extensionPayload.actions.find((action) => action.id === "view_private_blockers")?.blockers ?? [];
+    expect(blockers.length).toBeGreaterThan(0);
+    expect(JSON.stringify(blockers)).not.toMatch(/wallet|hotkey|coldkey|payout|farming|guaranteed payout/i);
 
     const missingPullContext = await app.request(
       "/v1/extension/pull-context?owner=entrius&repo=allways-ui&pullNumber=99",
@@ -1930,6 +1982,7 @@ describe("api routes", () => {
     await expect(missingPullContext.json()).resolves.toMatchObject({
       repoFullName: "entrius/allways-ui",
       pullNumber: 99,
+      actions: expect.arrayContaining([expect.objectContaining({ id: "copy_public_safe_packet" }), expect.objectContaining({ id: "view_private_blockers" })]),
       panels: expect.arrayContaining([expect.objectContaining({ label: "Contributor", badge: "unknown" })]),
     });
 
