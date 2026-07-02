@@ -1,4 +1,4 @@
-import { createInstallationToken } from "./app";
+import { withInstallationTokenRetry } from "./app";
 import { githubRateLimitAdmissionKeyForInstallation, makeInstallationOctokit } from "./client";
 import type { AgentActionMode } from "../settings/agent-execution";
 import type { AutoMergeMethod } from "../types";
@@ -38,17 +38,18 @@ export async function createPullRequestReview(
   commitId?: string,
 ): Promise<{ id: number }> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-  const response = await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
-    owner,
-    repo,
-    pull_number: pullNumber,
-    event,
-    body,
-    ...(commitId ? { commit_id: commitId } : {}),
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    const response = await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      event,
+      body,
+      ...(commitId ? { commit_id: commitId } : {}),
+    });
+    return { id: (response.data as { id: number }).id };
   });
-  return { id: (response.data as { id: number }).id };
 }
 
 /** Post a quiet, NON-BLOCKING review (`event: "COMMENT"`) carrying line-anchored inline comments — the
@@ -66,17 +67,18 @@ export async function createPullRequestReviewComments(
   mode: AgentActionMode,
 ): Promise<{ id: number }> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, mode, githubRateLimitAdmissionKeyForInstallation(installationId));
-  const response = await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
-    owner,
-    repo,
-    pull_number: pullNumber,
-    commit_id: commitId,
-    event: "COMMENT",
-    comments,
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, mode, githubRateLimitAdmissionKeyForInstallation(installationId));
+    const response = await octokit.request("POST /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      commit_id: commitId,
+      event: "COMMENT",
+      comments,
+    });
+    return { id: (response.data as { id: number }).id };
   });
-  return { id: (response.data as { id: number }).id };
 }
 
 /** Merge a pull request with the configured method. Pass `sha` to make the merge fail (409) if the head moved
@@ -89,17 +91,18 @@ export async function mergePullRequest(
   options: { mergeMethod: AutoMergeMethod; sha?: string | undefined },
 ): Promise<{ merged: boolean; sha: string | null }> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-  const response = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
-    owner,
-    repo,
-    pull_number: pullNumber,
-    merge_method: options.mergeMethod,
-    ...(options.sha ? { sha: options.sha } : {}),
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    const response = await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      merge_method: options.mergeMethod,
+      ...(options.sha ? { sha: options.sha } : {}),
+    });
+    const data = response.data as { merged?: boolean; sha?: string };
+    return { merged: data.merged ?? true, sha: data.sha ?? null };
   });
-  const data = response.data as { merged?: boolean; sha?: string };
-  return { merged: data.merged ?? true, sha: data.sha ?? null };
 }
 
 /** Dismiss the bot's own most recent APPROVE review (#2254). GitHub's `reviewDecision` is derived from the
@@ -111,30 +114,31 @@ export async function mergePullRequest(
 export async function dismissLatestBotApproval(env: Env, installationId: number, repoFullName: string, pullNumber: number, message: string): Promise<{ dismissed: boolean }> {
   try {
     const { owner, repo } = splitRepo(repoFullName);
-    const token = await createInstallationToken(env, installationId);
-    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-    const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
-    // Reviews are returned oldest-first; the LAST matching entry across ALL pages is the bot's most recent
-    // APPROVE. Stopping at page 1 would find (or miss) the wrong review on a PR with >100 total reviews.
-    let latestApprovalId: number | undefined;
-    for (let page = 1; page <= REVIEW_PAGE_LIMIT; page += 1) {
-      const response = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number: pullNumber, per_page: REVIEW_PAGE_SIZE, page });
-      const batch = response.data as Array<{ id: number; state?: string; user?: { login?: string | null } | null }>;
-      for (const review of batch) {
-        if (review.user?.login === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
+    return await withInstallationTokenRetry(env, installationId, async (token) => {
+      const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+      const botLogin = `${env.GITHUB_APP_SLUG}[bot]`;
+      // Reviews are returned oldest-first; the LAST matching entry across ALL pages is the bot's most recent
+      // APPROVE. Stopping at page 1 would find (or miss) the wrong review on a PR with >100 total reviews.
+      let latestApprovalId: number | undefined;
+      for (let page = 1; page <= REVIEW_PAGE_LIMIT; page += 1) {
+        const response = await octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", { owner, repo, pull_number: pullNumber, per_page: REVIEW_PAGE_SIZE, page });
+        const batch = response.data as Array<{ id: number; state?: string; user?: { login?: string | null } | null }>;
+        for (const review of batch) {
+          if (review.user?.login === botLogin && review.state === "APPROVED") latestApprovalId = review.id;
+        }
+        if (batch.length < REVIEW_PAGE_SIZE) break;
       }
-      if (batch.length < REVIEW_PAGE_SIZE) break;
-    }
-    if (latestApprovalId === undefined) return { dismissed: false };
-    await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", {
-      owner,
-      repo,
-      pull_number: pullNumber,
-      review_id: latestApprovalId,
-      message,
-      event: "DISMISS",
+      if (latestApprovalId === undefined) return { dismissed: false };
+      await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/reviews/{review_id}/dismissals", {
+        owner,
+        repo,
+        pull_number: pullNumber,
+        review_id: latestApprovalId,
+        message,
+        event: "DISMISS",
+      });
+      return { dismissed: true };
     });
-    return { dismissed: true };
   } catch {
     return { dismissed: false };
   }
@@ -153,42 +157,45 @@ export async function updatePullRequestBranch(
   expectedHeadSha?: string | undefined,
 ): Promise<void> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-  await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch", {
-    owner,
-    repo,
-    pull_number: pullNumber,
-    ...(expectedHeadSha ? { expected_head_sha: expectedHeadSha } : {}),
+  await withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      ...(expectedHeadSha ? { expected_head_sha: expectedHeadSha } : {}),
+    });
   });
 }
 
 /** Post a plain issue/PR comment (used for the templated close message before closing). */
 export async function createIssueComment(env: Env, installationId: number, repoFullName: string, issueNumber: number, body: string): Promise<{ id: number }> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-  const response = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
-    owner,
-    repo,
-    issue_number: issueNumber,
-    body,
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    const response = await octokit.request("POST /repos/{owner}/{repo}/issues/{issue_number}/comments", {
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body,
+    });
+    return { id: (response.data as { id: number }).id };
   });
-  return { id: (response.data as { id: number }).id };
 }
 
 /** Close a pull request (sets state=closed) without merging. */
 export async function closePullRequest(env: Env, installationId: number, repoFullName: string, pullNumber: number): Promise<{ state: string }> {
   const { owner, repo } = splitRepo(repoFullName);
-  const token = await createInstallationToken(env, installationId);
-  const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-  const response = await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
-    owner,
-    repo,
-    pull_number: pullNumber,
-    state: "closed",
+  return withInstallationTokenRetry(env, installationId, async (token) => {
+    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+    const response = await octokit.request("PATCH /repos/{owner}/{repo}/pulls/{pull_number}", {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      state: "closed",
+    });
+    return { state: (response.data as { state: string }).state };
   });
-  return { state: (response.data as { state: string }).state };
 }
 
 /** The last-closer lookup result. `coveredAllPages` is false when the bounded newest-events window did NOT reach
@@ -226,47 +233,48 @@ export async function getLastReopenerLogin(env: Env, installationId: number, rep
 async function getLastActorForEvent(env: Env, installationId: number, repoFullName: string, issueNumber: number, eventType: string): Promise<LastTimelineActorResult> {
   try {
     const { owner, repo } = splitRepo(repoFullName);
-    const token = await createInstallationToken(env, installationId);
-    const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
-    const requestPage = (page: number) =>
-      octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/events", { owner, repo, issue_number: issueNumber, per_page: ISSUE_EVENTS_PAGE_SIZE, page });
-    const firstResponse = await requestPage(1);
-    const firstEvents = firstResponse.data as Array<{ event?: string; actor?: { login?: string | null } | null }>;
-    const lastPage = issueEventsLastPage(firstResponse.headers.link);
-    if (lastPage === null) {
-      // No rel="last" in the Link header. A genuine single page has no rel="next" either — return page 1 directly.
-      // But GitHub can paginate WITHOUT emitting rel="last" (only rel="next"); then trusting page 1 alone would let
-      // a later maintainer/bot event hide behind the un-enumerated tail and the reopen guard would fail OPEN. So
-      // follow rel="next" forward, tracking the latest matching event across pages (events are oldest-first → a
-      // later page's event supersedes), bounded by the same page budget. coveredAllPages holds ONLY if we reached
-      // the tail within budget; otherwise report not-covered so the caller fails closed. (#audit-rel-last)
-      if (!issueEventsHasNextPage(firstResponse.headers.link)) {
-        return { login: latestActorInPage(firstEvents, eventType) ?? null, coveredAllPages: true };
+    return await withInstallationTokenRetry(env, installationId, async (token) => {
+      const octokit = makeInstallationOctokit(env, token, "live", githubRateLimitAdmissionKeyForInstallation(installationId));
+      const requestPage = (page: number) =>
+        octokit.request("GET /repos/{owner}/{repo}/issues/{issue_number}/events", { owner, repo, issue_number: issueNumber, per_page: ISSUE_EVENTS_PAGE_SIZE, page });
+      const firstResponse = await requestPage(1);
+      const firstEvents = firstResponse.data as Array<{ event?: string; actor?: { login?: string | null } | null }>;
+      const lastPage = issueEventsLastPage(firstResponse.headers.link);
+      if (lastPage === null) {
+        // No rel="last" in the Link header. A genuine single page has no rel="next" either — return page 1 directly.
+        // But GitHub can paginate WITHOUT emitting rel="last" (only rel="next"); then trusting page 1 alone would let
+        // a later maintainer/bot event hide behind the un-enumerated tail and the reopen guard would fail OPEN. So
+        // follow rel="next" forward, tracking the latest matching event across pages (events are oldest-first → a
+        // later page's event supersedes), bounded by the same page budget. coveredAllPages holds ONLY if we reached
+        // the tail within budget; otherwise report not-covered so the caller fails closed. (#audit-rel-last)
+        if (!issueEventsHasNextPage(firstResponse.headers.link)) {
+          return { login: latestActorInPage(firstEvents, eventType) ?? null, coveredAllPages: true };
+        }
+        let latestActor = latestActorInPage(firstEvents, eventType);
+        let hasNext = true;
+        for (let page = 2; hasNext && page <= ISSUE_EVENTS_RECENT_PAGE_LIMIT + 1; page += 1) {
+          const response = await requestPage(page);
+          const actor = latestActorInPage(response.data as Array<{ event?: string; actor?: { login?: string | null } | null }>, eventType);
+          if (actor !== undefined) latestActor = actor;
+          hasNext = issueEventsHasNextPage(response.headers.link);
+        }
+        const coveredAllPages = !hasNext;
+        return { login: coveredAllPages ? (latestActor ?? null) : null, coveredAllPages };
       }
-      let latestActor = latestActorInPage(firstEvents, eventType);
-      let hasNext = true;
-      for (let page = 2; hasNext && page <= ISSUE_EVENTS_RECENT_PAGE_LIMIT + 1; page += 1) {
+      if (lastPage <= 1) return { login: latestActorInPage(firstEvents, eventType) ?? null, coveredAllPages: true };
+
+      // GitHub returns issue-events oldest-first. Use the Link header to inspect the newest bounded window instead
+      // of the oldest prefix, so a long self-generated timeline cannot hide a later maintainer/bot event.
+      const firstPageToRead = Math.max(2, lastPage - ISSUE_EVENTS_RECENT_PAGE_LIMIT + 1);
+      // We inspected the entire timeline only when the window reached page 2 (page 1 is read separately above).
+      const coveredAllPages = firstPageToRead === 2;
+      for (let page = lastPage; page >= firstPageToRead; page -= 1) {
         const response = await requestPage(page);
         const actor = latestActorInPage(response.data as Array<{ event?: string; actor?: { login?: string | null } | null }>, eventType);
-        if (actor !== undefined) latestActor = actor;
-        hasNext = issueEventsHasNextPage(response.headers.link);
+        if (actor !== undefined) return { login: actor, coveredAllPages };
       }
-      const coveredAllPages = !hasNext;
-      return { login: coveredAllPages ? (latestActor ?? null) : null, coveredAllPages };
-    }
-    if (lastPage <= 1) return { login: latestActorInPage(firstEvents, eventType) ?? null, coveredAllPages: true };
-
-    // GitHub returns issue-events oldest-first. Use the Link header to inspect the newest bounded window instead
-    // of the oldest prefix, so a long self-generated timeline cannot hide a later maintainer/bot event.
-    const firstPageToRead = Math.max(2, lastPage - ISSUE_EVENTS_RECENT_PAGE_LIMIT + 1);
-    // We inspected the entire timeline only when the window reached page 2 (page 1 is read separately above).
-    const coveredAllPages = firstPageToRead === 2;
-    for (let page = lastPage; page >= firstPageToRead; page -= 1) {
-      const response = await requestPage(page);
-      const actor = latestActorInPage(response.data as Array<{ event?: string; actor?: { login?: string | null } | null }>, eventType);
-      if (actor !== undefined) return { login: actor, coveredAllPages };
-    }
-    return { login: coveredAllPages ? (latestActorInPage(firstEvents, eventType) ?? null) : null, coveredAllPages };
+      return { login: coveredAllPages ? (latestActorInPage(firstEvents, eventType) ?? null) : null, coveredAllPages };
+    });
   } catch {
     // On error we cannot prove we read the whole timeline — report not-covered so the caller decides conservatively.
     return { login: null, coveredAllPages: false };
