@@ -127,7 +127,7 @@ export const SELFHOST_ENV_REFERENCE_ROWS: SelfHostEnvReferenceRow[] = [
   },
   {
     name: "MAINTENANCE_ADMISSION_ENABLED",
-    firstReference: "src/selfhost/maintenance-admission.ts:111",
+    firstReference: "src/selfhost/maintenance-admission.ts:123",
   },
   {
     name: "MIGRATIONS_DIR",
@@ -344,7 +344,7 @@ export const SELFHOST_ENV_REFERENCE_MARKDOWN = [
   "| `GITTENSORY_REPO_CONFIG_DIR` | `src/server.ts:281` |",
   "| `GITTENSORY_VERSION` | `src/selfhost/health.ts:29` |",
   "| `HOME` | `src/selfhost/ai.ts:274` |",
-  "| `MAINTENANCE_ADMISSION_ENABLED` | `src/selfhost/maintenance-admission.ts:111` |",
+  "| `MAINTENANCE_ADMISSION_ENABLED` | `src/selfhost/maintenance-admission.ts:123` |",
   "| `MIGRATIONS_DIR` | `src/server.ts:377` |",
   "| `OBSERVABILITY_SMOKE_POLL_MS` | `scripts/smoke-observability-traces.mjs:8` |",
   "| `OBSERVABILITY_SMOKE_TIMEOUT_MS` | `scripts/smoke-observability-traces.mjs:6` |",

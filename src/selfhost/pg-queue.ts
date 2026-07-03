@@ -402,6 +402,9 @@ export function createPgQueue(
     const maintenanceRes = await pool.query(
       `SELECT COUNT(*) AS cnt, MIN(created_at) AS oldest FROM ${TABLE} WHERE status IN ('pending','processing') AND is_maintenance=1`,
     );
+    const backlogConvergenceRes = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM ${TABLE} WHERE status IN ('pending','processing') AND foreground_lane='backlog'`,
+    );
     const live = liveRes.rows[0] as {
       cnt: string | number;
       oldest: string | number | null;
@@ -409,6 +412,7 @@ export function createPgQueue(
       oldest_runnable: string | number | null;
     };
     const maintenance = maintenanceRes.rows[0] as { cnt: string | number; oldest: string | number | null };
+    const backlogConvergence = backlogConvergenceRes.rows[0] as { cnt: string | number };
     return {
       livePendingCount: Number(live.cnt),
       oldestLivePendingAgeMs: live.oldest != null ? now - Number(live.oldest) : null,
@@ -416,6 +420,7 @@ export function createPgQueue(
       oldestLiveRunnableAgeMs: live.oldest_runnable != null ? now - Number(live.oldest_runnable) : null,
       maintenancePendingCount: Number(maintenance.cnt),
       oldestMaintenancePendingAgeMs: maintenance.oldest != null ? now - Number(maintenance.oldest) : null,
+      backlogConvergencePendingCount: Number(backlogConvergence.cnt),
       hostLoadAvg1PerCore: hostLoadAvg1PerCore(),
     };
   }

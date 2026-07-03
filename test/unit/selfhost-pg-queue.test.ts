@@ -69,13 +69,15 @@ interface MockPool {
    *  on a specific row (rowCount 0) while another succeeds (rowCount 1). */
   setReviveUpdateRowCounts(rowCounts: number[]): void;
   setRateLimitRows(rows: Array<{ admission_key?: string | null; repo_full_name?: string | null; remaining: number | string | null; reset_at: string | null; observed_at?: string | null }>): void;
-  /** Configures the two maintenance-admission pressure aggregate queries (live + maintenance lane). Defaults
-   *  to zero pending / null oldest in both lanes (pressure clear) until set. `runnableCnt`/`oldestRunnable`
-   *  back the #selfhost-queue-liveness runnable-now split (see maintenancePressureSignals's FILTER columns);
-   *  they default to 0/null (nothing runnable) so existing tests that never set them keep working. */
+  /** Configures the three maintenance-admission pressure aggregate queries (live + maintenance + backlog-
+   *  convergence lane). Defaults to zero pending / null oldest in all lanes (pressure clear) until set.
+   *  `runnableCnt`/`oldestRunnable` back the #selfhost-queue-liveness runnable-now split (see
+   *  maintenancePressureSignals's FILTER columns); they default to 0/null (nothing runnable) so existing tests
+   *  that never set them keep working. */
   setPressureSignals(signals: {
     live?: { cnt: number; oldest: number | null; runnableCnt?: number; oldestRunnable?: number | null };
     maintenance?: { cnt: number; oldest: number | null };
+    backlogConvergence?: { cnt: number };
   }): void;
   /** Programs the exact rows returned by releaseStaleForegroundDeferrals' candidate SELECT
    *  (`WHERE status='pending' AND priority>=$1 AND run_after>$2`), and the per-row rowCount its conditional
@@ -102,6 +104,7 @@ function makePool(): MockPool {
     oldest: null,
   };
   let pressureMaintenance: { cnt: number; oldest: number | null } = { cnt: 0, oldest: null };
+  let pressureBacklogConvergence: { cnt: number } = { cnt: 0 };
   let foregroundLivenessCandidates: Array<{ id: string; created_at: number; payload?: string }> = [];
   const foregroundLivenessUpdateRowCounts: number[] = [];
   const DEFAULT_FOREGROUND_LIVENESS_PAYLOAD = JSON.stringify({
@@ -145,6 +148,9 @@ function makePool(): MockPool {
         ],
         rowCount: 1,
       };
+    }
+    if (q.includes("AS cnt") && q.includes("foreground_lane='backlog'")) {
+      return { rows: [{ cnt: String(pressureBacklogConvergence.cnt) }], rowCount: 1 };
     }
     if (q.includes("FROM github_rate_limit_observations")) {
       const admissionKey = typeof params?.[0] === "string" ? params[0] : null;
@@ -206,6 +212,7 @@ function makePool(): MockPool {
     setPressureSignals(signals) {
       if (signals.live) pressureLive = signals.live;
       if (signals.maintenance) pressureMaintenance = signals.maintenance;
+      if (signals.backlogConvergence) pressureBacklogConvergence = signals.backlogConvergence;
     },
     setRateLimitRows(rows) {
       rateLimitRows = rows;
@@ -2476,6 +2483,33 @@ describe("createPgQueue (durable #977)", () => {
       expect(started).not.toContain("build-contributor-evidence");
     });
 
+    it("defers a maintenance job when the backlog-convergence lane is high (#selfhost-backlog-convergence)", async () => {
+      const m = makePool();
+      m.setPressureSignals({ backlogConvergence: { cnt: 11 } }); // default threshold is 10
+      m.enqueueResult({ rows: [], rowCount: 0 });
+      m.enqueueResult({ rows: [maintenanceRow], rowCount: 1 });
+      const started: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void started.push(typeOf(j)));
+      await q.drain();
+      expect(started).not.toContain("build-contributor-evidence");
+      expect(await renderMetrics()).toContain(
+        'gittensory_jobs_maintenance_admission_deferred_by_reason_total{job_type="build-contributor-evidence",reason="backlog_convergence_high"} 1',
+      );
+    });
+
+    it("never defers a foreground job even under backlog-convergence-triggering pressure", async () => {
+      const m = makePool();
+      m.setPressureSignals({ backlogConvergence: { cnt: 11 } });
+      m.enqueueResult({
+        rows: [{ id: "w1", payload: JSON.stringify(msg("github-webhook")), attempts: 0, job_key: null, priority: 10, created_at: now }],
+        rowCount: 1,
+      });
+      const started: string[] = [];
+      const q = createPgQueue(m.pool, async (j) => void started.push(typeOf(j)));
+      await q.drain();
+      expect(started).toEqual(["github-webhook"]);
+    });
+
     // Regression (#selfhost-maintenance-self-pin): mirrors selfhost-sqlite-queue.test.ts exactly -- a large
     // backlog (well over threshold) no longer denies EVERY job forever; a job old enough for the drain age gets
     // admitted while a fresh job in the SAME backlog still defers.
@@ -2569,9 +2603,13 @@ describe("createPgQueue (durable #977)", () => {
       expect(await renderMetrics()).not.toContain("gittensory_jobs_maintenance_admission_granted_under_pressure_total");
     });
 
-    it("pressureSignals() surfaces the live and maintenance aggregate reads", async () => {
+    it("pressureSignals() surfaces the live, maintenance, and backlog-convergence aggregate reads", async () => {
       const m = makePool();
-      m.setPressureSignals({ live: { cnt: 2, oldest: now - 1_000 }, maintenance: { cnt: 4, oldest: now - 2_000 } });
+      m.setPressureSignals({
+        live: { cnt: 2, oldest: now - 1_000 },
+        maintenance: { cnt: 4, oldest: now - 2_000 },
+        backlogConvergence: { cnt: 3 },
+      });
       const q = createPgQueue(m.pool, async () => undefined);
       const signals = await q.pressureSignals();
       expect(signals).toEqual({
@@ -2581,6 +2619,7 @@ describe("createPgQueue (durable #977)", () => {
         oldestLiveRunnableAgeMs: null,
         maintenancePendingCount: 4,
         oldestMaintenancePendingAgeMs: expect.any(Number),
+        backlogConvergencePendingCount: 3,
         hostLoadAvg1PerCore: null,
       });
     });

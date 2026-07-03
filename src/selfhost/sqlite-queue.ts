@@ -1076,6 +1076,10 @@ function maintenancePressureSignals(driver: SqliteDriver, now: number): Maintena
     `SELECT COUNT(*) as cnt, MIN(created_at) as oldest FROM ${TABLE} WHERE status IN ('pending','processing') AND is_maintenance=1`,
     [],
   ).rows[0] as { cnt: number; oldest: number | null };
+  const backlogConvergence = driver.query(
+    `SELECT COUNT(*) as cnt FROM ${TABLE} WHERE status IN ('pending','processing') AND foreground_lane='backlog'`,
+    [],
+  ).rows[0] as { cnt: number };
   return {
     livePendingCount: Number(live.cnt),
     oldestLivePendingAgeMs: live.oldest != null ? now - Number(live.oldest) : null,
@@ -1083,6 +1087,7 @@ function maintenancePressureSignals(driver: SqliteDriver, now: number): Maintena
     oldestLiveRunnableAgeMs: live.oldest_runnable != null ? now - Number(live.oldest_runnable) : null,
     maintenancePendingCount: Number(maintenance.cnt),
     oldestMaintenancePendingAgeMs: maintenance.oldest != null ? now - Number(maintenance.oldest) : null,
+    backlogConvergencePendingCount: Number(backlogConvergence.cnt),
     hostLoadAvg1PerCore: hostLoadAvg1PerCore(),
   };
 }
