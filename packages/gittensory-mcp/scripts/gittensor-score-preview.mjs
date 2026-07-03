@@ -8,12 +8,15 @@ function isTestFile(file) {
     /(^|\/)src\/test\//i.test(file) ||
     /(^|\/)[^/]+_test\.(go|py|rb)$/i.test(file) ||
     /(^|\/)[^/]+_spec\.rb$/i.test(file) ||
-    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file)
+    /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|rs)$/i.test(file) ||
+    // JVM/.NET/Swift PascalCase test-class suffix (case-sensitive, matching the
+    // signal classifiers) so C#/Swift/Groovy tests aren't counted as source.
+    /(^|\/)\w*(Tests?|Spec)\.(java|kt|kts|scala|cs|swift|groovy)$/.test(file)
   );
 }
 
 function isCodeFile(file) {
-  return /\.(ts|tsx|js|jsx|py|rb|rs|kt|scala|java|go|sql)$/i.test(file) && !isTestFile(file);
+  return /\.(ts|tsx|js|jsx|py|rb|rs|kt|scala|java|go|sql|cs|swift|groovy)$/i.test(file) && !isTestFile(file);
 }
 
 function lineCount(file) {
