@@ -87,11 +87,12 @@ const ECOSYSTEM: Record<string, string> = {
   "go.mod": "Go",
 };
 
-/** Extract added/changed (not removed) dependency versions from the changed manifests in the diff. Pure. */
-export function extractDependencyChanges(
+/** Collect direct-dependency add/remove versions from changed manifest patches. Pure. */
+function collectManifestDependencyEntries(
   files: NonNullable<EnrichRequest["files"]>,
   limits: ScanLimits = {},
-): DepChange[] {
+  keyByFile = false,
+): Map<string, { ecosystem: string; package: string; added?: string; removed?: string }> {
   const byKey = new Map<
     string,
     { ecosystem: string; package: string; added?: string; removed?: string }
@@ -112,15 +113,25 @@ export function extractDependencyChanges(
         continue;
       const parsed = parseLine(manifest, line.slice(1).trim());
       if (!parsed) continue;
-      const key = ecosystem + "::" + parsed.name;
+      const key = keyByFile
+        ? `${file.path}::${ecosystem}::${parsed.name}`
+        : `${ecosystem}::${parsed.name}`;
       const entry = byKey.get(key) ?? { ecosystem, package: parsed.name };
       if (sign === "+") entry.added = parsed.version;
       else entry.removed = parsed.version;
       byKey.set(key, entry);
     }
   }
+  return byKey;
+}
+
+/** Extract added/changed (not removed) dependency versions from the changed manifests in the diff. Pure. */
+export function extractDependencyChanges(
+  files: NonNullable<EnrichRequest["files"]>,
+  limits: ScanLimits = {},
+): DepChange[] {
   const changes: DepChange[] = [];
-  for (const entry of byKey.values()) {
+  for (const entry of collectManifestDependencyEntries(files, limits).values()) {
     // Only scan a version that's present after the change, and only when it actually changed.
     if (!entry.added || entry.added === entry.removed) continue;
     changes.push({
@@ -131,6 +142,54 @@ export function extractDependencyChanges(
     });
   }
   return changes;
+}
+
+export type DependencyInventoryDirection = "add" | "remove" | "change";
+
+export interface DependencyInventoryChange {
+  ecosystem: string;
+  package: string;
+  from: string | null;
+  to: string | null;
+  direction: DependencyInventoryDirection;
+}
+
+/** Neutral direct-dependency inventory delta from manifest patches — add, remove, and version change. Pure. */
+export function extractDependencyInventoryChanges(
+  files: NonNullable<EnrichRequest["files"]>,
+  limits: ScanLimits = {},
+  maxFindings = 25,
+): DependencyInventoryChange[] {
+  const findings: DependencyInventoryChange[] = [];
+  for (const entry of collectManifestDependencyEntries(files, limits, true).values()) {
+    if (findings.length >= maxFindings) break;
+    if (entry.added && entry.removed && entry.added !== entry.removed) {
+      findings.push({
+        ecosystem: entry.ecosystem,
+        package: entry.package,
+        from: entry.removed,
+        to: entry.added,
+        direction: "change",
+      });
+    } else if (entry.added && !entry.removed) {
+      findings.push({
+        ecosystem: entry.ecosystem,
+        package: entry.package,
+        from: null,
+        to: entry.added,
+        direction: "add",
+      });
+    } else if (entry.removed && !entry.added) {
+      findings.push({
+        ecosystem: entry.ecosystem,
+        package: entry.package,
+        from: entry.removed,
+        to: null,
+        direction: "remove",
+      });
+    }
+  }
+  return findings;
 }
 
 interface OsvVuln {
