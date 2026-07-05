@@ -21140,6 +21140,1060 @@ describe("converted_to_draft gate-close (draft-dodge prevention)", () => {
   });
 });
 
+function draftEvasionPayload(author: string, headSha = "abc123"): any {
+  return {
+    action: "converted_to_draft",
+    installation: { id: 123 },
+    repository: { id: 1, name: "gittensory", full_name: "JSONbored/gittensory", private: false, default_branch: "main", owner: { login: "JSONbored" } },
+    sender: { login: author, type: "User" },
+    pull_request: {
+      id: 4242,
+      number: 42,
+      state: "open",
+      title: "Some PR",
+      body: "Body.",
+      user: { login: author },
+      head: { sha: headSha, ref: "fix", repo: { full_name: `${author}/gittensory`, owner: { login: author } } },
+      base: { sha: "base123", ref: "main", repo: { full_name: "JSONbored/gittensory", owner: { login: "JSONbored" } } },
+      draft: true,
+      merged: false,
+      mergeable_state: "clean",
+      created_at: "2026-05-27T00:00:00Z",
+      updated_at: "2026-05-27T00:00:00Z",
+    },
+  };
+}
+
+function closedPayload(sender: string, author = sender, headSha = "abc123"): any {
+  return {
+    action: "closed",
+    installation: { id: 123 },
+    repository: { id: 1, name: "gittensory", full_name: "JSONbored/gittensory", private: false, default_branch: "main", owner: { login: "JSONbored" } },
+    sender: { login: sender, type: "User" },
+    pull_request: {
+      id: 4242,
+      number: 42,
+      state: "closed",
+      title: "Some PR",
+      body: "Body.",
+      user: { login: author },
+      head: { sha: headSha, ref: "fix", repo: { full_name: `${author}/gittensory`, owner: { login: author } } },
+      base: { sha: "base123", ref: "main", repo: { full_name: "JSONbored/gittensory", owner: { login: "JSONbored" } } },
+      draft: false,
+      merged: false,
+      mergeable_state: "clean",
+      created_at: "2026-05-27T00:00:00Z",
+      updated_at: "2026-05-27T00:00:00Z",
+    },
+  };
+}
+
+describe("review-evasion protection (#review-evasion-protection)", () => {
+  beforeEach(() => clearInstallationTokenCacheForTest());
+  afterEach(() => {
+    clearInstallationTokenCacheForTest();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  async function setupEvasionRepo(env: ReturnType<typeof createTestEnv>, overrides: Record<string, unknown> = {}): Promise<void> {
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertInstallation(env, {
+      installation: {
+        id: 123,
+        account: { login: "JSONbored", id: 1, type: "User" },
+        repository_selection: "selected",
+        permissions: { metadata: "read", pull_requests: "write", issues: "write" },
+        events: ["pull_request"],
+      },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      publicSurface: "off",
+      commentMode: "off",
+      checkRunMode: "off",
+      autonomy: { close: "auto" },
+      agentPaused: false,
+      reviewEvasionProtection: "close",
+      ...overrides,
+    });
+  }
+
+  // Generic GitHub fetch stub covering every endpoint the evasion handlers (and the surrounding webhook
+  // pipeline they run inside) can call. `collaboratorPermission` controls what a non-owner/non-admin closer's
+  // permission check reports (default "read" — an ordinary contributor).
+  function stubEvasionFetch(calls: Array<{ url: string; method: string }>, opts: { collaboratorPermission?: string; onPatch?: (url: string) => Response | null } = {}) {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      calls.push({ url, method });
+      if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+      if (url.includes("/collaborators/")) return Response.json({ permission: opts.collaboratorPermission ?? "read" });
+      if (method === "PATCH" && url.endsWith("/pulls/42")) {
+        const custom = opts.onPatch?.(url);
+        if (custom) return custom;
+        return Response.json({ state: url === "open" ? "open" : "closed" });
+      }
+      if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+      if (url.includes("/check-runs")) return Response.json({ id: 900 }, { status: 201 });
+      if (url.includes("/labels")) return Response.json([{ name: "review-evasion" }]);
+      if (url.includes("/pulls/42/files")) return Response.json([]);
+      return new Response("not found", { status: 404 });
+    });
+  }
+
+  describe("self-close during an active review", () => {
+    it("reopens then re-closes as the App, posts the explanation comment, applies the label, and records a review_evasion strike", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", authorLogin: "contributor", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-1", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      const patches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"));
+      expect(patches.length).toBeGreaterThanOrEqual(2); // reopen (state=open) then re-close (state=closed)
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("completed");
+      expect(audit?.detail).toContain("contributor");
+      expect(await repositoriesModule.hasActiveReviewForHeadSha(env, "JSONbored/gittensory", 42, "abc123")).toBe(false); // terminalized
+      const strike = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ outcome: string }>();
+      expect(strike?.outcome).toBe("completed");
+    });
+
+    it("retries (via a thrown lock-contended error) when a concurrent delivery already holds the per-PR actuation lock", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await env.SELFHOST_TRANSIENT_CACHE?.set("pr-actuation-lock:jsonbored/gittensory#42", "1", 60);
+
+      await expect(
+        processJob(env, { type: "github-webhook", deliveryId: "self-close-lock-contended", eventName: "pull_request", payload: closedPayload("contributor") }),
+      ).rejects.toThrow("during review-evasion-self-close");
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ n: number }>();
+      expect(audit?.n).toBe(0); // no decision recorded either way -- the queue retry owns the deferred decision
+    });
+
+    it("does nothing when reviewEvasionProtection is off (the default)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off" });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-off", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ n: number }>();
+      expect(audit?.n).toBe(0);
+    });
+
+    it("does nothing when NO active review is tracked for this head (an ordinary close, nothing to evade)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      // No startActiveReviewTracking call at all.
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-active-review", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when a THIRD PARTY closed someone else's PR (not the author) — an ordinary maintainer close, not self-close evasion", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-third-party", eventName: "pull_request", payload: closedPayload("a-maintainer", "contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the closer is the repo owner", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-owner", eventName: "pull_request", payload: closedPayload("JSONbored") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the closer is an ADMIN_GITHUB_LOGINS fleet-operator", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory", ADMIN_GITHUB_LOGINS: "admin-user" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-admin", eventName: "pull_request", payload: closedPayload("admin-user") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the closer holds write/maintain/admin collaborator permission", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-maintainer", eventName: "pull_request", payload: closedPayload("write-collaborator") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing for a protected automation author (e.g. dependabot[bot])", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-bot", eventName: "pull_request", payload: closedPayload("dependabot[bot]") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("dry-run: audits the would-be enforcement without mutating GitHub or recording a live strike", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { agentDryRun: true });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-dry-run", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("completed");
+      expect(audit?.detail).toContain("dry-run");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("denies enforcement when the agent is globally frozen", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.setGlobalAgentFrozen(env, true, "test");
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-frozen", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("paused");
+    });
+
+    it("denies enforcement when close autonomy is not acting (observe)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { autonomy: { close: "observe" } });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-observe", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("autonomy for close is not acting");
+    });
+
+    it("denies enforcement when pull_requests: write is not granted", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+      await upsertInstallation(env, {
+        installation: {
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", issues: "write" },
+          events: ["pull_request"],
+        },
+        repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+      });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", publicSurface: "off", commentMode: "off", checkRunMode: "off", autonomy: { close: "auto" }, agentPaused: false, reviewEvasionProtection: "close" });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-write", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("pull_requests: write not granted");
+    });
+
+    it("denies enforcement when live PR state has moved since the webhook was received", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({ status: "stale", reason: "head_changed", expectedHeadSha: "abc123", liveHeadSha: "def456", liveState: "closed" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-stale", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("review-evasion enforcement not executed");
+    });
+
+    it("audits an error and does NOT record a strike when the reopen API call fails", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return new Response("server error", { status: 500 });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-reopen-fail", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("error");
+      expect(audit?.detail).toContain("FAILED to reopen");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+      // The PR is closed either way (our reopen attempt failing doesn't reopen it) -- the general
+      // "closed"-action cleanup still terminalizes the tracking row, independent of enforcement success.
+      expect(await repositoriesModule.hasActiveReviewForHeadSha(env, "JSONbored/gittensory", 42, "abc123")).toBe(false);
+    });
+
+    it("REGRESSION (gate-flagged): throws (never silently leaves the PR open) when reopen succeeds but the re-close API call fails, so the queue retries the job", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      let patchCount = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) {
+          patchCount += 1;
+          if (patchCount === 1) return Response.json({ state: "open" }); // reopen succeeds
+          return new Response("server error", { status: 500 }); // re-close fails
+        }
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      // Deliberately UNCAUGHT: leaving the reopened PR open and returning normally would be worse than the
+      // contributor's original close, so this must propagate for the queue's own retry mechanism instead of
+      // resolving quietly.
+      await expect(
+        processJob(env, { type: "github-webhook", deliveryId: "self-close-close-fail", eventName: "pull_request", payload: closedPayload("contributor") }),
+      ).rejects.toThrow();
+
+      expect(patchCount).toBe(2);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("error");
+      expect(audit?.detail).toContain("FAILED to re-close");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+      // Still active -- enforcement never completed, so the active-review row must not have been cleared
+      // (the active-review-tracking cleanup below only fires on the "closed" webhook action's OWN pass, and
+      // this throw aborts that pass before it reaches the general terminalize hook).
+      expect(await repositoriesModule.hasActiveReviewForHeadSha(env, "JSONbored/gittensory", 42, "abc123")).toBe(true);
+    });
+
+    it("REGRESSION (gate-flagged): a retry after the re-close failure converges -- the PR ends up closed, and the strike is recorded exactly once", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      let closeAttempts = 0;
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) {
+          const body = init?.body ? JSON.parse(String(init.body)) : {};
+          if (body.state === "open") return Response.json({ state: "open" }); // reopen always succeeds
+          closeAttempts += 1;
+          if (closeAttempts === 1) return new Response("server error", { status: 500 }); // FIRST close attempt fails
+          return Response.json({ state: "closed" }); // retry's close attempt succeeds
+        }
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+        if (url.includes("/labels")) return Response.json([{ name: "review-evasion" }]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", authorLogin: "contributor", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      const payload = closedPayload("contributor");
+      await expect(processJob(env, { type: "github-webhook", deliveryId: "self-close-close-fail-retry", eventName: "pull_request", payload })).rejects.toThrow();
+      // The queue's own retry mechanism re-delivers the SAME job after the first attempt threw.
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-close-fail-retry", eventName: "pull_request", payload });
+
+      expect(closeAttempts).toBe(2);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ? order by created_at desc limit 1").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+      const strikeCount = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strikeCount?.n).toBe(1); // exactly one strike, not one per attempt
+      expect(await repositoriesModule.hasActiveReviewForHeadSha(env, "JSONbored/gittensory", 42, "abc123")).toBe(false);
+    });
+
+    it("global moderation disabled: the evasion close/label/comment still happen, but no moderation strike/label is recorded", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      // Global moderation config left at its default (disabled).
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-mod-off", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("REGRESSION: no duplicate strike or duplicate enforcement on a webhook redelivery/retry after the first enforcement already succeeded", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-redelivery-1", eventName: "pull_request", payload: closedPayload("contributor") });
+      const firstPatchCount = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42")).length;
+      expect(firstPatchCount).toBeGreaterThanOrEqual(2);
+
+      // A SECOND, genuinely distinct delivery for the same underlying event (e.g. a queue retry after the first
+      // job's ack was lost) — the active-review row is already terminalized, so this must be a pure no-op.
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-redelivery-2", eventName: "pull_request", payload: closedPayload("contributor") });
+      const secondPatchCount = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42")).length - firstPatchCount;
+      expect(secondPatchCount).toBe(0);
+
+      const strikeCount = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strikeCount?.n).toBe(1);
+    });
+
+    it("a subsequent contributor reopen after the App's evasion close is re-closed by the EXISTING one-shot reopen guard", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-then-reopen-1", eventName: "pull_request", payload: closedPayload("contributor") });
+      expect((await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>())?.outcome).toBe("completed");
+
+      // getLastCloserLogin reads the issue-events timeline -- the App's own close (via the enforcement handler,
+      // NOT via the reopen-reclose guard) must be visible there for the existing guard to recognize it.
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/contributor/permission")) return Response.json({ permission: "read" });
+        if (url.includes("/issues/42/events")) return Response.json([{ event: "closed", actor: { login: "gittensory[bot]" } }, { event: "reopened", actor: { login: "contributor" } }]);
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 2 }, { status: 201 });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return Response.json({ state: "closed" });
+        return new Response("not found", { status: 404 });
+      });
+      await processJob(env, { type: "github-webhook", deliveryId: "contributor-reopens-after-evasion-close", eventName: "pull_request", payload: reopenedPayload("contributor") });
+
+      const reopenAudit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.reopen_reclosed").first<{ outcome: string; detail: string }>();
+      expect(reopenAudit?.outcome).toBe("completed");
+      expect(reopenAudit?.detail).toContain("one-shot");
+    });
+
+    it("does nothing when reviewEvasionProtection is unset (undefined, not just 'off')", async () => {
+      // upsertRepositorySettings coalesces undefined -> "off" at write time (mirrors reviewEvasionLabel/
+      // reviewEvasionComment's own write-time defaulting below), so the only way to get `undefined` past that
+      // coalescing and into the handler is to mock the resolved-settings layer directly.
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionProtection: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-protection-unset", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the webhook payload has no sender", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = closedPayload("contributor");
+      payload.sender = undefined;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-sender", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the PR record has no author (a deleted-account PR)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = closedPayload("contributor");
+      payload.pull_request.user = null;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-author", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the PR record has no headSha", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = closedPayload("contributor");
+      payload.pull_request.head = null;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-head-sha", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("denies enforcement when the installation record is missing (uninstalled mid-flight)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      vi.spyOn(repositoriesModule, "getInstallation").mockResolvedValue(null);
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-installation", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("pull_requests: write not granted");
+    });
+
+    it("skips the courtesy comment when reviewEvasionComment is unset (defaults to true, but false is honored too)", async () => {
+      // Same write-time-coalescing note as the reviewEvasionProtection test above.
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionComment: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-comment-unset", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      // reviewEvasionComment unset falls back to `true` -- the courtesy comment still posts.
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+    });
+
+    it("applies no label when reviewEvasionLabel is explicitly null (a .gittensory.yml-only 'no label' override)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      const labelPostBodies: string[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return Response.json({ state: "closed" });
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+        if (method === "POST" && url.endsWith("/issues/42/labels")) {
+          labelPostBodies.push(String(init?.body ?? ""));
+          return Response.json([], { status: 200 });
+        }
+        if (url.includes("/labels")) return Response.json([]); // dedup probe: no labels on the issue yet
+        if (url.includes("/pulls/42/files")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      // reviewEvasionLabel is a NOT NULL DB column (upsertRepositorySettings coalesces null -> the default at
+      // write time, per the migration's own "never persisted" comment) -- null only ever reaches this handler
+      // via the .gittensory.yml config-as-code layer, so the resolved-settings layer is mocked directly here.
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionLabel: null });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-label-null", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      // Some OTHER unrelated feature (title-based type-labeling) may still post its own labels on a close --
+      // what matters here is that the review-evasion label specifically was never requested.
+      expect(labelPostBodies.some((b) => b.includes("review-evasion"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+    });
+
+    it("falls back to the default label when reviewEvasionLabel is unset", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      const labelPostBodies: string[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return Response.json({ state: "closed" });
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+        if (method === "POST" && url.endsWith("/issues/42/labels")) {
+          labelPostBodies.push(String(init?.body ?? ""));
+          return Response.json([], { status: 200 });
+        }
+        if (url.includes("/labels")) return Response.json([]); // dedup probe: no labels on the issue yet
+        if (url.includes("/pulls/42/files")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionLabel: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-label-unset", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(labelPostBodies.some((b) => b.includes("review-evasion"))).toBe(true);
+    });
+  });
+
+  describe("converted_to_draft during an active review", () => {
+    it("closes as the App (no reopen needed), posts the explanation comment, applies the label, and records a review_evasion strike", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", authorLogin: "contributor", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-1", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      const patches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"));
+      expect(patches).toHaveLength(1); // no reopen needed -- a single close.
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("completed");
+      expect(audit?.detail).toContain("draft-conversion");
+      const strike = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ outcome: string }>();
+      expect(strike?.outcome).toBe("completed");
+    });
+
+    it("retries (via a thrown lock-contended error) when a concurrent delivery already holds the per-PR actuation lock", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      // Deliberately autonomy: {} (not {close: "auto"}) -- this repo's OUTER dispatch condition for the
+      // SIBLING draft-dodge guard requires isAgentConfigured(settings.autonomy), so with no acting autonomy
+      // class at all, draft-dodge's OWN lock-claim attempt is skipped entirely and this test genuinely
+      // exercises THIS handler's own lock claim/throw, not draft-dodge's (both guards fire on
+      // converted_to_draft and would otherwise race for the identical lock key).
+      await setupEvasionRepo(env, { autonomy: {} });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await env.SELFHOST_TRANSIENT_CACHE?.set("pr-actuation-lock:jsonbored/gittensory#42", "1", 60);
+
+      await expect(
+        processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-lock-contended", eventName: "pull_request", payload: draftEvasionPayload("contributor") }),
+      ).rejects.toThrow("during review-evasion-draft");
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ n: number }>();
+      expect(audit?.n).toBe(0);
+    });
+
+    it("does nothing for a draft conversion BEFORE any active review has started", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      // No startActiveReviewTracking call -- no review has ever run for this PR.
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-active-review", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does NOT require a prior gate failure (unlike the draft-dodge guard) -- an active review alone is enough", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      // Deliberately NO recordGateBlockOutcome call -- the draft-dodge guard's own trigger condition is absent.
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-gate-failure", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      const draftDodgeAudit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.draft_dodge_closed").first<{ n: number }>();
+      expect(draftDodgeAudit?.n).toBe(0); // the SIBLING guard never fired -- this is genuinely the new path.
+      const evasionAudit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(evasionAudit?.outcome).toBe("completed");
+    });
+
+    it("does nothing when the author holds write collaborator permission", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-maintainer", eventName: "pull_request", payload: draftEvasionPayload("write-collaborator") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("REGRESSION (gate-flagged): does nothing when a THIRD PARTY converts someone else's PR to draft (not the author) -- an ordinary maintainer action, not self-evasion, must never be enforced against the author who didn't do it", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = draftEvasionPayload("contributor");
+      payload.sender = { login: "a-maintainer", type: "User" }; // the CONVERTER, distinct from pull_request.user (the author)
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-third-party", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ n: number }>();
+      expect(audit?.n).toBe(0);
+    });
+
+    it("dry-run: audits the would-be enforcement without mutating GitHub or recording a live strike", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { agentDryRun: true });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-dry-run", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("completed");
+      expect(audit?.detail).toContain("dry-run");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("denies enforcement when the agent is globally frozen", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.setGlobalAgentFrozen(env, true, "test");
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-frozen", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("paused");
+    });
+
+    it("denies enforcement when close autonomy is not acting (observe)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { autonomy: { close: "observe" } });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-observe", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("autonomy for close is not acting");
+    });
+
+    it("denies enforcement when pull_requests: write is not granted", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+      await upsertInstallation(env, {
+        installation: {
+          id: 123,
+          account: { login: "JSONbored", id: 1, type: "User" },
+          repository_selection: "selected",
+          permissions: { metadata: "read", issues: "write" },
+          events: ["pull_request"],
+        },
+        repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+      });
+      await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", publicSurface: "off", commentMode: "off", checkRunMode: "off", autonomy: { close: "auto" }, agentPaused: false, reviewEvasionProtection: "close" });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-write", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("pull_requests: write not granted");
+    });
+
+    it("denies enforcement when the PR was converted back to ready_for_review before the close fires (requireDraft freshness)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      vi.mocked(fetchPullRequestFreshness).mockResolvedValueOnce({ status: "stale", reason: "no_longer_draft", expectedHeadSha: "abc123", liveHeadSha: "abc123", liveState: "open" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-longer-draft", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      expect(fetchPullRequestFreshness).toHaveBeenCalledWith(env, expect.objectContaining({ requireDraft: true }));
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+    });
+
+    it("audits an error and does NOT record a strike when the close API call fails", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return new Response("server error", { status: 500 });
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-close-fail", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("error");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("global moderation disabled: the evasion close/label/comment still happen, but no moderation strike is recorded", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-mod-off", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("does nothing when reviewEvasionProtection is unset (undefined, not just 'off')", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionProtection: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-protection-unset", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the webhook payload has no sender", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = draftEvasionPayload("contributor");
+      payload.sender = undefined;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-sender", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the PR record has no author (a deleted-account PR)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = draftEvasionPayload("contributor");
+      payload.pull_request.user = null;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-author", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing for a protected automation author (e.g. dependabot[bot])", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-bot", eventName: "pull_request", payload: draftEvasionPayload("dependabot[bot]") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the PR record has no headSha", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+
+      const payload = draftEvasionPayload("contributor");
+      payload.pull_request.head = null;
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-head-sha", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("denies enforcement when the installation record is missing (uninstalled mid-flight)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      vi.spyOn(repositoriesModule, "getInstallation").mockResolvedValue(null);
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-no-installation", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("denied");
+      expect(audit?.detail).toContain("pull_requests: write not granted");
+    });
+
+    it("skips the courtesy comment when reviewEvasionComment is unset (defaults to true, but false is honored too)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionComment: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-comment-unset", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+    });
+
+    it("applies no label when reviewEvasionLabel is explicitly null (a .gittensory.yml-only 'no label' override)", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      const labelPostBodies: string[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return Response.json({ state: "closed" });
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+        if (method === "POST" && url.endsWith("/issues/42/labels")) {
+          labelPostBodies.push(String(init?.body ?? ""));
+          return Response.json([], { status: 200 });
+        }
+        if (url.includes("/labels")) return Response.json([]); // dedup probe: no labels on the issue yet
+        if (url.includes("/pulls/42/files")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionLabel: null });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-label-null", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(labelPostBodies.some((b) => b.includes("review-evasion"))).toBe(false);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+    });
+
+    it("falls back to the default label when reviewEvasionLabel is unset", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      const labelPostBodies: string[] = [];
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        calls.push({ url, method });
+        if (url.includes("/access_tokens")) return Response.json({ token: "t" });
+        if (url.includes("/collaborators/")) return Response.json({ permission: "read" });
+        if (method === "PATCH" && url.endsWith("/pulls/42")) return Response.json({ state: "closed" });
+        if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+        if (method === "POST" && url.endsWith("/issues/42/labels")) {
+          labelPostBodies.push(String(init?.body ?? ""));
+          return Response.json([], { status: 200 });
+        }
+        if (url.includes("/labels")) return Response.json([]); // dedup probe: no labels on the issue yet
+        if (url.includes("/pulls/42/files")) return Response.json([]);
+        return new Response("not found", { status: 404 });
+      });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", deliveryId: "review-start-1" });
+      const baseSettings = await repositorySettingsModule.resolveRepositorySettings(env, "JSONbored/gittensory");
+      vi.spyOn(repositorySettingsModule, "resolveRepositorySettings").mockResolvedValue({ ...baseSettings, reviewEvasionLabel: undefined });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-evasion-label-unset", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(labelPostBodies.some((b) => b.includes("review-evasion"))).toBe(true);
+    });
+  });
+});
+
 describe("recordAgentCommandUsage (signal-snapshot fail-safe)", () => {
   afterEach(() => {
     vi.restoreAllMocks();
