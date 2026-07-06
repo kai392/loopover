@@ -3330,6 +3330,49 @@ async function prReadyForReview(
       }).catch(() => undefined);
       return false;
     }
+    // #orb-ci-stuck-repeat: finalizing here runs a full paid AI review -- but a permanently-stuck CI context
+    // (a fork check that will never report, an orphaned required context) never resolves, so every later
+    // evaluation of the SAME head SHA hits this exact branch again and would re-spend another review for a
+    // disposition already established. Confirmed live: 3 PRs whose CI never settled each burned 200-300+ full
+    // reviews over 20+ hours this way, at a steady few-minute cadence, entirely independent of the sweep's own
+    // outage-repair cap (#orb-retry-storm) since ordinary (non-priority) sweep candidacy still reaches this
+    // function. Cap it at one finalize per head SHA (via a SHA-scoped audit event, no new table): once already
+    // finalized for this exact SHA, defer again instead of paying for another review. A new commit changes the
+    // head SHA, which resets the guard and lets the PR finalize fresh if it's still stuck.
+    const guardTargetKey = `${repoFullName}#${pr.number}#${pr.headSha}`;
+    const alreadyFinalizedForSha = await countRecentAuditEventsForActorAndTarget(
+      env,
+      "gittensory",
+      CI_STUCK_FINALIZE_GUARD_EVENT_TYPE,
+      guardTargetKey,
+      new Date(Date.now() - CI_STUCK_FINALIZE_GUARD_LOOKBACK_MS).toISOString(),
+    );
+    if (alreadyFinalizedForSha >= CI_STUCK_FINALIZE_MAX_PER_SHA) {
+      await recordAuditEvent(env, {
+        eventType: "github_app.review_deferred_ci_pending",
+        actor: "gittensory",
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "queued",
+        detail: "CI still stuck pending, but already finalized once for this head SHA — deferring again instead of re-spending a review",
+        metadata: { deliveryId, repoFullName, headSha: pr.headSha },
+      }).catch(() => undefined);
+      // level:"error" is deliberate, not a code failure: this line only fires once the guard above already
+      // stopped the wasteful re-review, so its OWN existence is the operator-visible signal (via the structured
+      // log → Sentry forwarder, forwardStructuredLogToSentry) that a PR's CI has been permanently stuck long
+      // enough to need a human — the same "surface an anomaly at error level" convention selfhost_ai_provider_
+      // failed / selfhost_ai_providers_exhausted already use in src/selfhost/ai.ts.
+      console.error(
+        JSON.stringify({
+          level: "error",
+          event: "ci_stuck_review_repeat_suppressed",
+          repo: repoFullName,
+          pullNumber: pr.number,
+          headSha: pr.headSha,
+          deliveryId,
+        }),
+      );
+      return false;
+    }
     await recordAuditEvent(env, {
       eventType: "github_app.review_finalized_ci_stuck",
       actor: "gittensory",
@@ -3339,10 +3382,22 @@ async function prReadyForReview(
         "CI stuck pending past the staleness cap — finalizing so the PR is surfaced, not silently deferred forever",
       metadata: { deliveryId, repoFullName },
     }).catch(() => undefined);
+    await recordAuditEvent(env, {
+      eventType: CI_STUCK_FINALIZE_GUARD_EVENT_TYPE,
+      actor: "gittensory",
+      targetKey: guardTargetKey,
+      outcome: "completed",
+      detail: "recorded so a repeat evaluation of the SAME head SHA does not pay for another review",
+      metadata: { repoFullName, prNumber: pr.number, headSha: pr.headSha },
+    }).catch(() => undefined);
     // fall through → return true → the gate finalizes + the PR is disposed/held, never silently stuck.
   }
   return true;
 }
+
+const CI_STUCK_FINALIZE_GUARD_EVENT_TYPE = "github_app.review_finalized_ci_stuck_guard";
+const CI_STUCK_FINALIZE_MAX_PER_SHA = 1;
+const CI_STUCK_FINALIZE_GUARD_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
 
 // A required check pending longer than this is treated as STUCK (orphaned / never-completing — e.g. a fork check
 // that will never report). Past it, prReadyForReview stops deferring and finalizes the gate so the PR surfaces
