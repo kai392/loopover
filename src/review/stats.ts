@@ -238,7 +238,7 @@ export function buildCycleTimeDistribution(samplesMs: number[], bucketCount = 12
   const min = Math.min(...samplesMs);
   if (max === min) return [samplesMs.length];
   const buckets = Array.from({ length: bucketCount }, () => 0);
-  const span = max - min || 1;
+  const span = max - min;
   for (const ms of samplesMs) {
     const idx = Math.min(bucketCount - 1, Math.floor(((ms - min) / span) * bucketCount));
     buckets[idx]! += 1;

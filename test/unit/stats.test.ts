@@ -445,6 +445,10 @@ describe("cycle-time aggregation (#2194)", () => {
     expect(buildCycleTimeDistribution([5, 5, 5])).toEqual([3]);
   });
 
+  it("buildCycleTimeDistribution places the max sample in the last bucket (boundary clamp)", () => {
+    expect(buildCycleTimeDistribution([0, 100], 2)).toEqual([1, 1]);
+  });
+
   it("aggregateCycleTimePercentiles folds samples into p50/p90/p99 + distribution", () => {
     const agg = aggregateCycleTimePercentiles([60_000, 120_000, 180_000, 240_000, 300_000]);
     expect(agg.sampleSize).toBe(5);
@@ -489,6 +493,71 @@ describe("cycle-time aggregation (#2194)", () => {
     } as unknown as Env;
     const { computeCycleTimeAggregate } = await import("../../src/review/stats");
     expect(await computeCycleTimeAggregate(env, { days: 30, nowMs: NOW })).toEqual(EMPTY_CYCLE_TIME);
+  });
+
+  it("computeCycleTimeAggregate defaults non-finite/non-positive days to 90", async () => {
+    let boundFrom: string | undefined;
+    const env = {
+      DB: {
+        prepare: () => ({
+          bind: (fromIso: string) => {
+            boundFrom = fromIso;
+            return { all: async () => ({ results: [] as Array<{ decided_at: string; outcome_at: string }> }) };
+          },
+        }),
+      },
+    } as unknown as Env;
+    const { computeCycleTimeAggregate } = await import("../../src/review/stats");
+    await computeCycleTimeAggregate(env, { days: Number.NaN, nowMs: NOW });
+    expect(boundFrom).toBe(new Date(NOW - 90 * 86_400_000).toISOString().slice(0, 10));
+  });
+
+  it("computeCycleTimeAggregate clamps days to 730", async () => {
+    let boundFrom: string | undefined;
+    const env = {
+      DB: {
+        prepare: () => ({
+          bind: (fromIso: string) => {
+            boundFrom = fromIso;
+            return { all: async () => ({ results: [] as Array<{ decided_at: string; outcome_at: string }> }) };
+          },
+        }),
+      },
+    } as unknown as Env;
+    const { computeCycleTimeAggregate } = await import("../../src/review/stats");
+    await computeCycleTimeAggregate(env, { days: 99_999, nowMs: NOW });
+    expect(boundFrom).toBe(new Date(NOW - 730 * 86_400_000).toISOString().slice(0, 10));
+  });
+
+  it("computeCycleTimeAggregate tolerates missing D1 results and skips null cycle deltas", async () => {
+    const env = {
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({
+              results: undefined,
+            }),
+          }),
+        }),
+      },
+    } as unknown as Env;
+    const envWithBadRows = {
+      DB: {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({
+              results: [
+                { decided_at: "2026-06-01T10:00:00Z", outcome_at: "2026-06-01T09:00:00Z" },
+                { decided_at: "bad", outcome_at: "2026-06-01T09:00:00Z" },
+              ],
+            }),
+          }),
+        }),
+      },
+    } as unknown as Env;
+    const { computeCycleTimeAggregate } = await import("../../src/review/stats");
+    expect(await computeCycleTimeAggregate(env, { days: 30, nowMs: NOW })).toEqual(EMPTY_CYCLE_TIME);
+    expect(await computeCycleTimeAggregate(envWithBadRows, { days: 30, nowMs: NOW })).toEqual(EMPTY_CYCLE_TIME);
   });
 });
 
