@@ -88,6 +88,21 @@ function defaultBuildArgs(task: CodingAgentDriverTask): string[] {
   return defaultCliSubprocessArgs(task);
 }
 
+/** Claude Code's `--output-format json` sometimes exits non-zero while still emitting a structured
+ *  `{is_error, api_error_status}` envelope on stdout (e.g. an auth/model error). Ported from
+ *  src/selfhost/ai.ts's `claudeErrorStatus` -- redeclared here rather than imported, per this file's own
+ *  no-src-import convention (see header comment). Returns null on absent/malformed stdout, in which case the
+ *  caller falls back to the generic exit-code error unchanged (#5168). */
+function claudeErrorStatus(stdout: string): string | null {
+  try {
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    if (parsed.is_error === true) return String(parsed.api_error_status ?? parsed.subtype ?? "unknown");
+  } catch {
+    /* not a single JSON object -- handled by the caller's generic exit-code fallback */
+  }
+  return null;
+}
+
 /** The default argv contract, exported so the factory (#4289) can PREFIX provider config (e.g. a configured
  *  model flag) without re-inventing — and silently drifting from — this baseline argv shape. */
 export function defaultCliSubprocessArgs(task: CodingAgentDriverTask): string[] {
@@ -145,6 +160,18 @@ export function createCliSubprocessCodingAgentDriver(options: CliSubprocessDrive
         };
       }
       if (spawned.code !== 0) {
+        if (options.command === "claude") {
+          const errStatus = claudeErrorStatus(spawned.stdout);
+          if (errStatus) {
+            return {
+              ok: false,
+              changedFiles: [],
+              summary: `${options.command} exited non-zero`,
+              transcript,
+              error: redactSecrets(`claude_code_error_${errStatus}`, knownSecrets),
+            };
+          }
+        }
         const stderr = (spawned.stderr ?? "").trim();
         const detail = redactSecrets(stderr || `exit ${spawned.code}`, knownSecrets).slice(0, MAX_ERROR_DETAIL_CHARS);
         return {

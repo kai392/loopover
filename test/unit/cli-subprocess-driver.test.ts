@@ -170,4 +170,74 @@ describe("createCliSubprocessCodingAgentDriver (#4266)", () => {
       expect(Object.keys(result).sort()).toEqual(["changedFiles", "error", "ok", "summary", "transcript"]);
     });
   });
+
+  describe("Claude Code JSON error-envelope diagnostics (#5168)", () => {
+    it("folds a valid {is_error, api_error_status} envelope into a precise claude_code_error_<status>", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ is_error: true, api_error_status: "invalid_api_key" }),
+        code: 1,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe("claude_code_error_invalid_api_key");
+    });
+
+    it("falls back to subtype when api_error_status is absent, and to 'unknown' when both are absent", async () => {
+      const { spawn: spawnSubtype } = fakeSpawn({
+        stdout: JSON.stringify({ is_error: true, subtype: "overloaded" }),
+        code: 1,
+      });
+      const driverSubtype = createCliSubprocessCodingAgentDriver({ command: "claude", spawn: spawnSubtype });
+      expect((await driverSubtype.run(TASK)).error).toBe("claude_code_error_overloaded");
+
+      const { spawn: spawnUnknown } = fakeSpawn({ stdout: JSON.stringify({ is_error: true }), code: 1 });
+      const driverUnknown = createCliSubprocessCodingAgentDriver({ command: "claude", spawn: spawnUnknown });
+      expect((await driverUnknown.run(TASK)).error).toBe("claude_code_error_unknown");
+    });
+
+    it("falls back to the raw stderr-slice shape unchanged when stdout has no error envelope (regression: today's uninformative-error behavior is preserved for the non-envelope case)", async () => {
+      const { spawn } = fakeSpawn({ stdout: "not json at all", code: 1, stderr: "generic failure" });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.error).toBe("claude_exit_1: generic failure");
+    });
+
+    it("falls back unchanged when stdout is valid JSON but is_error is not true", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ is_error: false, result: "partial answer" }),
+        code: 1,
+        stderr: "exit detail",
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "claude", spawn });
+      const result = await driver.run(TASK);
+      expect(result.error).toBe("claude_exit_1: exit detail");
+    });
+
+    it("never inspects the envelope for a non-claude command (falls through to the generic exit-code error untouched)", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ is_error: true, api_error_status: "invalid_api_key" }),
+        code: 1,
+        stderr: "codex own error text",
+      });
+      const driver = createCliSubprocessCodingAgentDriver({ command: "codex", spawn });
+      const result = await driver.run(TASK);
+      expect(result.error).toBe("codex_exit_1: codex own error text");
+    });
+
+    it("invariant: a folded envelope error is never left unredacted when it happens to contain a known secret value", async () => {
+      const { spawn } = fakeSpawn({
+        stdout: JSON.stringify({ is_error: true, api_error_status: "token-my-injected-longkey-leaked" }),
+        code: 1,
+      });
+      const driver = createCliSubprocessCodingAgentDriver({
+        command: "claude",
+        spawn,
+        knownSecrets: ["my-injected-longkey-leaked"],
+      });
+      const result = await driver.run(TASK);
+      expect(result.error).not.toContain("my-injected-longkey-leaked");
+      expect(result.error).toContain("[redacted]");
+    });
+  });
 });
