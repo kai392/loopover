@@ -15,7 +15,7 @@
         "label": "Provider",
         "type": "query",
         "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" },
-        "query": { "queryType": "table", "queryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider", "rawQueryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider" },
+        "query": { "refId": "A", "queryType": "table", "queryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider", "rawQueryText": "SELECT DISTINCT provider FROM ai_usage_events WHERE provider IS NOT NULL ORDER BY provider" },
         "includeAll": true,
         "allValue": "__ALL__",
         "multi": false,
@@ -28,7 +28,7 @@
         "label": "Feature",
         "type": "query",
         "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" },
-        "query": { "queryType": "table", "queryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature", "rawQueryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature" },
+        "query": { "refId": "A", "queryType": "table", "queryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature", "rawQueryText": "SELECT DISTINCT feature FROM ai_usage_events ORDER BY feature" },
         "includeAll": true,
         "allValue": "__ALL__",
         "multi": false,
@@ -42,6 +42,7 @@
         "type": "query",
         "datasource": { "type": "frser-sqlite-datasource", "uid": "loopover-db" },
         "query": {
+          "refId": "A",
           "queryType": "table",
           "queryText": "SELECT DISTINCT model FROM ai_usage_events WHERE (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) ORDER BY model",
           "rawQueryText": "SELECT DISTINCT model FROM ai_usage_events WHERE (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) ORDER BY model"
@@ -179,8 +180,8 @@
           "queryType": "time series",
           "timeColumns": ["time"],
           "metricColumn": "feature",
-          "queryText": "SELECT date(created_at) AS time, feature, coalesce(sum(total_tokens), 0) AS tokens FROM ai_usage_events WHERE provider IS NOT NULL AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND (${feature:sqlstring} = '__ALL__' OR feature = ${feature:sqlstring}) AND (${model:sqlstring} = '__ALL__' OR model = ${model:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY date(created_at), feature ORDER BY time",
-          "rawQueryText": "SELECT date(created_at) AS time, feature, coalesce(sum(total_tokens), 0) AS tokens FROM ai_usage_events WHERE provider IS NOT NULL AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND (${feature:sqlstring} = '__ALL__' OR feature = ${feature:sqlstring}) AND (${model:sqlstring} = '__ALL__' OR model = ${model:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY date(created_at), feature ORDER BY time"
+          "queryText": "SELECT unixepoch(date(created_at)) * 1000 AS time, feature, coalesce(sum(total_tokens), 0) AS tokens FROM ai_usage_events WHERE provider IS NOT NULL AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND (${feature:sqlstring} = '__ALL__' OR feature = ${feature:sqlstring}) AND (${model:sqlstring} = '__ALL__' OR model = ${model:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY date(created_at), feature ORDER BY time",
+          "rawQueryText": "SELECT unixepoch(date(created_at)) * 1000 AS time, feature, coalesce(sum(total_tokens), 0) AS tokens FROM ai_usage_events WHERE provider IS NOT NULL AND (${provider:sqlstring} = '__ALL__' OR provider = ${provider:sqlstring}) AND (${feature:sqlstring} = '__ALL__' OR feature = ${feature:sqlstring}) AND (${model:sqlstring} = '__ALL__' OR model = ${model:sqlstring}) AND unixepoch(created_at) >= ${__from:date:seconds} AND unixepoch(created_at) < ${__to:date:seconds} GROUP BY date(created_at), feature ORDER BY time"
         }
       ]
     },
