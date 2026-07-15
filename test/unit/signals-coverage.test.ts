@@ -41,7 +41,7 @@ import {
   buildRepoRewardRisk,
 } from "../../src/signals/reward-risk";
 import { PREFLIGHT_LIMITS } from "../../src/signals/preflight-limits";
-import type { FocusManifestReviewConfig } from "../../src/signals/focus-manifest";
+import { REVIEW_FIELD_KEYS, type FocusManifestReviewConfig } from "../../src/signals/focus-manifest";
 import type { GittensorContributorSnapshot } from "../../src/gittensor/api";
 import type {
   ContributorRepoStatRecord,
@@ -798,7 +798,10 @@ describe("signal coverage edge cases", () => {
       collisions,
       preflight: buildPreflightResult({ repoFullName: directRepo.fullName, title: "Fix cache", body: "Fixes #42", changedFiles: ["src/cache.ts"] }, directRepo, [], []),
     };
-    const KEYS = ["linkedIssue", "relatedWork", "reviewLoad", "validationEvidence", "openPrQueue", "contributorContext", "gateResult"];
+    // #6070: derived from the real REVIEW_FIELD_KEYS source instead of a second hardcoded copy. Excludes
+    // improvementSignal -- that row only appears when the caller passes `improvementSignal` (see the
+    // dedicated `buildImprovementSignalRow` coverage elsewhere), which none of the calls below do.
+    const KEYS = REVIEW_FIELD_KEYS.filter((key) => key !== "improvementSignal");
 
     // Provided gate is authoritative; gate enabled → a real gate action (not the advisory-only copy).
     const provided = buildPublicPrPanelSignalRows({ ...baseArgs, settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "required" }, gate: { conclusion: "success", summary: "Passing" } });

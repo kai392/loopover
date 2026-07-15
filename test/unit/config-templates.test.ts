@@ -10,6 +10,7 @@ import {
   reviewConfigToJson,
 } from "../../src/signals/focus-manifest";
 import { lintManifestText } from "../../src/selfhost/config-lint";
+import { REVIEW_FIELD_KEYS } from "../../src/signals/focus-manifest";
 
 // #1682: self-host operators need discoverable, copy-paste templates under config/examples/ that
 // parse cleanly, stay in sync with the canonical root files, and keep the minimal starter safe.
@@ -276,5 +277,29 @@ describe("config/examples review templates (#1682)", () => {
     expect(imported.review.inlineComments).toBe(true);
     expect(imported.review.excludePaths).toEqual(["dist/**"]);
     expect(resolveAutonomy(imported.settings.autonomy, "review")).toBe("auto_with_approval");
+  });
+});
+
+// #6070: the review.fields key list is hand-documented in several places (a doc-comment line in each
+// config example, a bundled TS fallback, and prose in CONTRIBUTING.md), each in its own distinct textual
+// format (YAML comment vs. prose vs. inline comment) -- too varied for a single generated line to slot
+// into all of them, so this guards drift instead of eliminating the copies outright: every key REAL
+// REVIEW_FIELD_KEYS constant defines must appear as a substring somewhere in each file below. A key added
+// to the source without updating one of these documentation copies fails here instead of rotting silently
+// (as CONTRIBUTING.md's copy already had -- it was missing `improvementSignal` until this same change).
+describe("review.fields key list stays documented everywhere it's hand-copied (#6070)", () => {
+  const DOC_FILES: ReadonlyArray<{ path: string; read: () => string }> = [
+    { path: ".loopover.yml", read: () => readRoot(".loopover.yml") },
+    { path: ".loopover.yml.example", read: () => readRoot(".loopover.yml.example") },
+    { path: "config/examples/loopover.full.yml", read: () => readConfigExample("loopover.full.yml") },
+    { path: "src/config/loopover-repo-focus-manifest.ts", read: () => readFileSync("src/config/loopover-repo-focus-manifest.ts", "utf8") },
+    { path: "CONTRIBUTING.md", read: () => readFileSync("CONTRIBUTING.md", "utf8") },
+  ];
+
+  it.each(DOC_FILES)("$path documents every REVIEW_FIELD_KEYS entry", ({ read }) => {
+    const content = read();
+    for (const key of REVIEW_FIELD_KEYS) {
+      expect(content, `missing review.fields key "${key}"`).toContain(key);
+    }
   });
 });

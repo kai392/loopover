@@ -293,8 +293,8 @@ Config as code (`.loopover.yml`) — every repository setting is controllable fr
 - **`review:`** customizes the public review-panel CONTENT: `footer: { text }` (custom lead copy — the
   Gittensor register link + attribution are always appended), `note` (a custom intro line), and
   `fields: { <row>: false }` to show/hide individual panel rows (`linkedIssue`, `relatedWork`, `reviewLoad`,
-  `validationEvidence`, `openPrQueue`, `contributorContext`, `gateResult`). Maintainer text that fails the
-  public-safe filter (reward/score/wallet/hotkey/etc.) is dropped, never published.
+  `validationEvidence`, `openPrQueue`, `contributorContext`, `gateResult`, `improvementSignal`). Maintainer
+  text that fails the public-safe filter (reward/score/wallet/hotkey/etc.) is dropped, never published.
 - **`repoDocGeneration:`** opts a repo into the AGENTS.md/CLAUDE.md generation roadmap (#2993) — a
   `.loopover.yml`-only surface with no dashboard/DB counterpart. `enabled` (default `false`) turns it on;
   `scope` (default `["agents"]`) picks which generated file types are in play (`"agents"` for
