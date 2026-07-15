@@ -735,6 +735,63 @@ describe("per-provider circuit breaker (#2540 — skip fast during a sustained o
     // call exhausted the (single-provider) chain — a circuit-open throw still counts as a chain exhaustion.
     expect(isAiProviderHealthy()).toBe(false);
   });
+
+  it("opens the circuit on the very FIRST structural codex-auth failure, not after 3 (GITTENSORY-K/8 — a deterministic failure shouldn't pay for 3 real attempts)", async () => {
+    const calls = vi.fn(async () => {
+      throw new Error("codex_auth_not_configured: ~/.codex/auth.json not found");
+    });
+    const brokenAuth = { name: "codex", ai: { run: calls } };
+    await expect(createChainAi([brokenAuth]).run("m", { prompt: "x" })).rejects.toThrow(/codex_auth_not_configured/);
+    expect(calls).toHaveBeenCalledTimes(1);
+    // The very NEXT call is already skipped — no need to accumulate AI_PROVIDER_FAILURE_THRESHOLD failures first.
+    await expect(createChainAi([brokenAuth]).run("m", { prompt: "x" })).rejects.toThrow(
+      /circuit_open: provider "codex" has a structural config error/,
+    );
+    expect(calls).toHaveBeenCalledTimes(1); // unchanged — the real provider was never reached a 2nd time
+    const metrics = await renderMetrics();
+    expect(metrics).toContain('loopover_ai_provider_circuit_open_total{provider="codex"} 1');
+    expect(metrics).toContain('loopover_ai_provider_failures_total{provider="codex"} 1'); // NOT 3
+  });
+
+  it("uses the long structural cooldown (1h), not the 60s transient cooldown — still open just past 60s, reachable again only past 1h", async () => {
+    vi.useFakeTimers();
+    const calls = vi.fn(async () => {
+      throw new Error("codex_no_auth: auth.json missing or expired");
+    });
+    const brokenAuth = { name: "codex-2", ai: { run: calls } };
+    await expect(createChainAi([brokenAuth]).run("m", { prompt: "x" })).rejects.toThrow(/codex_no_auth/);
+    expect(calls).toHaveBeenCalledTimes(1);
+    // Past the ORDINARY 60s transient cooldown, the structural circuit must still be open.
+    await vi.advanceTimersByTimeAsync(60_001);
+    await expect(createChainAi([brokenAuth]).run("m", { prompt: "x" })).rejects.toThrow(/circuit_open/);
+    expect(calls).toHaveBeenCalledTimes(1);
+    // Past the full 1h structural cooldown, the real provider is reachable again (e.g. to notice a fixed credential).
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    await expect(createChainAi([brokenAuth]).run("m", { prompt: "x" })).rejects.toThrow(/codex_no_auth/);
+    expect(calls).toHaveBeenCalledTimes(2); // the real provider WAS invoked this time
+  });
+
+  it("a success fully clears a structural circuit entry — a later transient failure starts fresh, not at the 1h structural cooldown", async () => {
+    vi.useFakeTimers();
+    let mode: "structural-fail" | "succeed" | "transient-fail" = "structural-fail";
+    const calls = vi.fn(async () => {
+      if (mode === "succeed") return { response: "ok" };
+      if (mode === "transient-fail") throw new Error("connection reset");
+      throw new Error("codex_auth_not_configured: ~/.codex/auth.json not found");
+    });
+    const provider = { name: "codex-3", ai: { run: calls } };
+    await expect(createChainAi([provider]).run("m", { prompt: "x" })).rejects.toThrow(/codex_auth_not_configured/);
+    // Credential fixed; jump past the 1h structural cooldown so the real provider is reachable again.
+    await vi.advanceTimersByTimeAsync(3_600_001);
+    mode = "succeed";
+    await expect(createChainAi([provider]).run("m", { prompt: "x" })).resolves.toEqual({ response: "ok" });
+    // A later, unrelated transient failure must start from a clean slate (1 failure, 60s-tier), not reopen
+    // immediately at the 1h structural cooldown left over from before the success.
+    mode = "transient-fail";
+    await expect(createChainAi([provider]).run("m", { prompt: "x" })).rejects.toThrow(/connection reset/);
+    await expect(createChainAi([provider]).run("m", { prompt: "x" })).rejects.toThrow(/connection reset/); // 2nd failure, still below threshold 3 — reaches the real provider again
+    expect(calls).toHaveBeenCalledTimes(4); // structural-fail, succeed, transient-fail x2 — all reached the real provider.ai.run
+  });
 });
 
 describe("isAiProviderHealthy (readiness streak, #2497)", () => {

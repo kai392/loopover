@@ -6,6 +6,7 @@
 // review proceeds deterministically. Every path returns `{ response: string }` (or throws → the caller
 // records an error and degrades — never a silent wrong answer).
 
+import { isStructuralProviderConfigError } from "../services/ai-review";
 import type { AiContentBlock, CombineStrategy, OnMerge } from "../services/ai-review";
 import { isConfiguredSelfHostProvider, resolveConfiguredProviderNames } from "./ai-config";
 export { assertNoLegacySharedAiEnv } from "./ai-config";
@@ -1148,7 +1149,17 @@ function recordAiProvidersExhausted(): void {
 // provider can be skipped fast without affecting readiness semantics.
 const AI_PROVIDER_FAILURE_THRESHOLD = 3;
 const AI_PROVIDER_COOLDOWN_MS = 60_000;
-const aiProviderCircuits = new Map<string, { failures: number; cooldownUntil: number }>();
+// A STRUCTURAL failure (bad/missing credentials -- isStructuralProviderConfigError) is deterministic: unlike a
+// transient outage, the same provider will fail identically on the very next attempt too, so there is no reason
+// to wait for AI_PROVIDER_FAILURE_THRESHOLD consecutive failures before opening the circuit, and no reason to
+// re-check nearly as often once it's open. Confirmed live (GITTENSORY-K/8): a container with codex's credential
+// file simply never present generated 2094 + 544 events over 16 days under the 60s/3-failure defaults -- each
+// cooldown expiry let exactly one attempt through, which immediately re-failed and re-opened the circuit for
+// another 60s, forever. A much longer cooldown still re-checks periodically (so a fixed credential is picked
+// back up within the hour, not stuck until a manual restart) without hammering a known-broken provider on every
+// incoming review.
+const AI_PROVIDER_STRUCTURAL_COOLDOWN_MS = 60 * 60_000;
+const aiProviderCircuits = new Map<string, { failures: number; cooldownUntil: number; structural: boolean }>();
 const EXPECTED_EMBEDDING_ROUTING_ERRORS = new Set(["claude_code_no_embed", "codex_no_embed"]);
 
 /** Test-only reset so circuit state from one test can't leak into the next (module-level map). */
@@ -1250,7 +1261,9 @@ async function runProviderWithOtel(
   if (circuit && circuit.cooldownUntil > Date.now()) {
     incr("loopover_ai_provider_circuit_open_total", { provider: provider.name });
     throw new Error(
-      `circuit_open: provider "${provider.name}" is in cooldown after ${AI_PROVIDER_FAILURE_THRESHOLD} consecutive failures — skipping this attempt`,
+      circuit.structural
+        ? `circuit_open: provider "${provider.name}" has a structural config error (bad/missing credentials) — skipping until the cooldown expires; fix the underlying config, then restart`
+        : `circuit_open: provider "${provider.name}" is in cooldown after ${AI_PROVIDER_FAILURE_THRESHOLD} consecutive failures — skipping this attempt`,
     );
   }
   const requestKindLabel = requestKind(options);
@@ -1290,9 +1303,16 @@ async function runProviderWithOtel(
     // this catch runs, and computing `failures` from it would clobber a sibling call's write (lost-update race)
     // instead of accumulating. No `await` between this read and the `.set()` below, so it's race-free.
     const failures = (aiProviderCircuits.get(provider.name)?.failures ?? 0) + 1;
+    // A structural failure is deterministic (see AI_PROVIDER_STRUCTURAL_COOLDOWN_MS above) -- open the circuit
+    // on the FIRST failure, not after AI_PROVIDER_FAILURE_THRESHOLD consecutive ones, at the much longer cooldown.
+    const structural = isStructuralProviderConfigError(error);
     aiProviderCircuits.set(provider.name, {
       failures,
-      cooldownUntil: failures >= AI_PROVIDER_FAILURE_THRESHOLD ? Date.now() + AI_PROVIDER_COOLDOWN_MS : 0,
+      cooldownUntil:
+        structural || failures >= AI_PROVIDER_FAILURE_THRESHOLD
+          ? Date.now() + (structural ? AI_PROVIDER_STRUCTURAL_COOLDOWN_MS : AI_PROVIDER_COOLDOWN_MS)
+          : 0,
+      structural,
     });
     throw error;
   }

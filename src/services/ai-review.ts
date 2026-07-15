@@ -1020,6 +1020,18 @@ export function isRateLimitError(error: unknown): boolean {
   return error instanceof Error && /_(?:http|error)_429$/.test(error.message);
 }
 
+/** True for a provider's own STRUCTURAL misconfiguration signal (`src/selfhost/ai.ts`'s
+ *  `codex_auth_not_configured` / `codex_no_auth` — a missing or expired credential file). Unlike a transient
+ *  timeout or rate limit, this will fail identically on every future attempt until an operator re-runs
+ *  `codex auth` -- confirmed live (GITTENSORY-K/8: 2094 + 544 events over 16 days from one unfixed
+ *  misconfiguration, the credential file was never present the whole time). Mirrors
+ *  {@link isSubscriptionCliTimeout}/{@link isRateLimitError}'s identical non-transient-error short-circuit.
+ *  Exported so `src/selfhost/ai.ts`'s circuit breaker can give this failure class a much longer cooldown
+ *  than a genuinely transient one. */
+export function isStructuralProviderConfigError(error: unknown): boolean {
+  return error instanceof Error && /^codex_(?:auth_not_configured|no_auth):/.test(error.message);
+}
+
 /** Cap on the diagnostic prefix logged for an unparseable model response (#observability-unparseable) -- long
  *  enough to tell a markdown-fenced/truncated-mid-JSON/plain-prose response apart, short enough to never dump
  *  a large chunk of model output into Sentry/audit context. */
@@ -1148,7 +1160,10 @@ async function runWorkersOpinion(
         // this attempt will not have cleared by the next attempt a few hundred ms later, so an immediate
         // same-model retry burns the remaining budget for zero additional chance of success -- move straight
         // to the fallback model instead, which may be on a different account/provider entirely.
-        if (isSubscriptionCliTimeout(error) || isRateLimitError(error)) break;
+        // A structural config error (missing/expired credentials) is stronger still: it is DETERMINISTIC, not
+        // just unlikely to clear in time -- the same model will fail the identical way on attempt 2 and 3 too,
+        // confirmed live (GITTENSORY-K/8: 2094 + 544 events over 16 days from one never-fixed misconfiguration).
+        if (isSubscriptionCliTimeout(error) || isRateLimitError(error) || isStructuralProviderConfigError(error)) break;
       }
     }
   }
@@ -1859,8 +1874,9 @@ async function runDualAiTieBreakJudgeCall(
           status: "provider_error",
           error: errorMessage(error),
         });
-        // See runWorkersOpinion's identical guard: a CLI timeout or 429 will not resolve by retrying the same model.
-        if (isSubscriptionCliTimeout(error) || isRateLimitError(error)) break;
+        // See runWorkersOpinion's identical guard: a CLI timeout, 429, or structural config error (bad/missing
+        // credentials) will not resolve by retrying the same model.
+        if (isSubscriptionCliTimeout(error) || isRateLimitError(error) || isStructuralProviderConfigError(error)) break;
       }
     }
   }

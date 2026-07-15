@@ -4,6 +4,7 @@ import {
   BEST_REVIEW_MODELS,
   buildTestEvidencePromptSection,
   callAiProvider,
+  isStructuralProviderConfigError,
   resolveEffectiveAiReviewOnMerge,
   resolveEffectiveAiReviewPlan,
   runLoopOverAiReview,
@@ -2877,6 +2878,21 @@ describe("pure helpers", () => {
       expect(run).toHaveBeenCalledTimes(2); // 1 primary (rate-limited) + 1 fallback (succeeded on its first try).
     });
 
+    it("runDualAiTieBreakJudgeCall stops retrying a model after ONE structural codex-auth config error, same as a CLI timeout or 429 (GITTENSORY-K/8)", async () => {
+      let primaryAttempts = 0;
+      const run = vi.fn(async (model: string) => {
+        if (model === "fallback") return { response: '{"favored":"reviewer_1"}' };
+        primaryAttempts += 1;
+        throw new Error("codex_auth_not_configured: ~/.codex/auth.json not found");
+      });
+      const env = createTestEnv({ AI: { run } as unknown as Ai });
+      const diagnostics: Array<{ status: string; model: string }> = [];
+      const parsed = await runDualAiTieBreakJudgeCall(env, "primary", "fallback", blockedA, clean, false, diagnostics as never);
+      expect(parsed?.verdict).toBe("reviewer_1");
+      expect(primaryAttempts).toBe(1); // NOT 3 -- a structural config error is deterministic, so retrying is pointless.
+      expect(run).toHaveBeenCalledTimes(2); // 1 primary (structural failure) + 1 fallback (succeeded on its first try).
+    });
+
     it("resolveDualAiTieBreakWithOrderStability returns inconclusive when judge output never parses", async () => {
       const run = vi.fn(async () => ({ response: "not-json" }));
       const env = createTestEnv({ AI: { run } as unknown as Ai });
@@ -3041,6 +3057,31 @@ describe("pure helpers", () => {
     expect(parsed.review?.assessment).toContain("reasonable");
     expect(primaryAttempts).toBe(1); // NOT 3 -- the 429 short-circuits further retries of this model.
     expect(run).toHaveBeenCalledTimes(2); // 1 primary (rate-limited) + 1 fallback (succeeded on its first try).
+  });
+
+  it("runWorkersOpinion stops retrying a model after ONE structural codex-auth config error, same as a CLI timeout or 429 (GITTENSORY-K/8)", async () => {
+    let primaryAttempts = 0;
+    const run = vi.fn(async (model: string) => {
+      if (model === "fallback") return { response: reviewJson() };
+      primaryAttempts += 1;
+      throw new Error("codex_no_auth: auth.json missing or expired");
+    });
+    const env = createTestEnv({ AI: { run } as unknown as Ai });
+    const diagnostics: Array<{ status: string; model: string }> = [];
+    const parsed = await runWorkersOpinion(env, "primary", "fallback", "sys", "user", 256, diagnostics as never);
+    expect(parsed.review?.assessment).toContain("reasonable");
+    expect(primaryAttempts).toBe(1); // NOT 3 -- a structural config error is deterministic, so retrying is pointless.
+    expect(run).toHaveBeenCalledTimes(2); // 1 primary (structural failure) + 1 fallback (succeeded on its first try).
+  });
+
+  it("isStructuralProviderConfigError matches only codex's own structural-config error messages, not other Errors or non-Error throws (GITTENSORY-K/8)", () => {
+    expect(isStructuralProviderConfigError(new Error("codex_auth_not_configured: ~/.codex/auth.json not found"))).toBe(true);
+    expect(isStructuralProviderConfigError(new Error("codex_no_auth: auth.json missing or expired"))).toBe(true);
+    expect(isStructuralProviderConfigError(new Error("connection reset"))).toBe(false);
+    // Anchored ("^codex_...") -- a wrapped/rethrown message doesn't match, only the exact provider-level throw does.
+    expect(isStructuralProviderConfigError(new Error("wrapped: codex_auth_not_configured: nested"))).toBe(false);
+    expect(isStructuralProviderConfigError("codex_auth_not_configured: not an Error instance")).toBe(false);
+    expect(isStructuralProviderConfigError(undefined)).toBe(false);
   });
 
   it("runWorkersOpinion still retries a genuinely transient (non-timeout, non-429) error up to the full budget", async () => {
