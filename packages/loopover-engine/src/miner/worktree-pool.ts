@@ -41,9 +41,18 @@ export function isWorktreeAllocated(state: WorktreePoolState, attemptId: string)
   return state.allocations.some((allocation) => allocation.attemptId === attemptId);
 }
 
+/** Normalize a possibly-untrusted concurrency cap before it gates allocation: a non-finite (`NaN`/`Infinity`),
+ *  negative, or fractional `maxConcurrency` can never disable the cap or yield a `NaN` slot count — it floors to
+ *  a non-negative integer, so an invalid value behaves as the documented non-positive cap (allocates nothing).
+ *  Mirrors the `finiteNonNegativeInt` discipline already applied in governor/rate-limit.ts, governor/budget-cap.ts,
+ *  and tenant-quota.ts (#5828). */
+function finiteNonNegativeInt(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
 /** Slots still available before the concurrency cap (never negative). Pure. */
 export function availableWorktreeSlots(state: WorktreePoolState, config: WorktreePoolConfig): number {
-  return Math.max(0, config.maxConcurrency - state.allocations.length);
+  return Math.max(0, finiteNonNegativeInt(config.maxConcurrency) - state.allocations.length);
 }
 
 /**
@@ -60,7 +69,7 @@ export function acquireWorktree(
   if (isWorktreeAllocated(state, input.attemptId)) {
     return { ok: false, reason: "already_allocated", state };
   }
-  if (state.allocations.length >= config.maxConcurrency) {
+  if (state.allocations.length >= finiteNonNegativeInt(config.maxConcurrency)) {
     return { ok: false, reason: "at_capacity", state };
   }
   const allocation: WorktreeAllocation = {

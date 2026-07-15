@@ -78,4 +78,38 @@ describe("worktree pool allocator (#4297)", () => {
     const s = acquired(acquired(EMPTY_WORKTREE_POOL, "a"), "b");
     expect(availableWorktreeSlots(s, { maxConcurrency: 1 })).toBe(0);
   });
+
+  it("treats a NaN maxConcurrency as a zero cap instead of disabling the limit", () => {
+    const cfg = { maxConcurrency: NaN };
+    expect(availableWorktreeSlots(EMPTY_WORKTREE_POOL, cfg)).toBe(0);
+    const r = acquireWorktree(EMPTY_WORKTREE_POOL, cfg, { attemptId: "a", repoPath: REPO });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("at_capacity");
+  });
+
+  it("treats a negative maxConcurrency as a zero cap", () => {
+    const cfg = { maxConcurrency: -1 };
+    expect(availableWorktreeSlots(EMPTY_WORKTREE_POOL, cfg)).toBe(0);
+    const r = acquireWorktree(EMPTY_WORKTREE_POOL, cfg, { attemptId: "a", repoPath: REPO });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe("at_capacity");
+  });
+
+  it("floors a fractional maxConcurrency to the nearest integer", () => {
+    const cfg = { maxConcurrency: 2.5 };
+    expect(availableWorktreeSlots(EMPTY_WORKTREE_POOL, cfg)).toBe(2);
+    const one = acquireWorktree(EMPTY_WORKTREE_POOL, cfg, { attemptId: "a", repoPath: REPO });
+    expect(one.ok).toBe(true);
+    if (!one.ok) return;
+    const two = acquireWorktree(one.state, cfg, { attemptId: "b", repoPath: REPO });
+    expect(two.ok).toBe(true);
+    if (!two.ok) return;
+    expect(availableWorktreeSlots(two.state, cfg)).toBe(0);
+    const three = acquireWorktree(two.state, cfg, { attemptId: "c", repoPath: REPO });
+    expect(three.ok).toBe(false);
+    if (three.ok) return;
+    expect(three.reason).toBe("at_capacity");
+  });
 });
