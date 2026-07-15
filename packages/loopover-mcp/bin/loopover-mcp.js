@@ -9,6 +9,7 @@ import { buildFeasibilityVerdict } from "@loopover/engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
+import { argsWantJson, describeCliError, reportCliFailure } from "../lib/cli-error.js";
 
 // Read name/version from this package's own package.json (always present in any install --
 // global, npx, or local -- npm ships it regardless of the "files" allowlist) instead of hand-synced
@@ -587,8 +588,12 @@ function stdioToolDescription(name) {
 }
 
 if (cliArgs[0] && cliArgs[0] !== "--stdio") {
-  const exitCode = await runCli(cliArgs);
-  process.exit(typeof exitCode === "number" ? exitCode : 0);
+  try {
+    const exitCode = await runCli(cliArgs);
+    process.exit(typeof exitCode === "number" ? exitCode : 0);
+  } catch (error) {
+    process.exit(reportCliFailure(argsWantJson(cliArgs), describeCliError(error), 1));
+  }
 }
 
 const server = new McpServer({
