@@ -19,9 +19,9 @@ import {
   buildMaintainerPacket,
   buildPreflightResult,
   buildPublicCommentSignalBundle,
-  buildPublicPrIntelligenceComment,
   buildPublicPrPanelSignalRows,
   buildPublicReadinessScore,
+  buildPublicSafeCollapsibles,
   buildQueueHealth,
   buildRoleContext,
   detectGittensorContributor,
@@ -41,7 +41,7 @@ import {
   buildRepoRewardRisk,
 } from "../../src/signals/reward-risk";
 import { PREFLIGHT_LIMITS } from "../../src/signals/preflight-limits";
-import { REVIEW_FIELD_KEYS, type FocusManifestReviewConfig } from "../../src/signals/focus-manifest";
+import { REVIEW_FIELD_KEYS } from "../../src/signals/focus-manifest";
 import type { GittensorContributorSnapshot } from "../../src/gittensor/api";
 import type {
   ContributorRepoStatRecord,
@@ -748,7 +748,14 @@ describe("signal coverage edge cases", () => {
       [],
       [],
     );
-    const comment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto the shared row/collapsible builders. The panelTitle
+    // ("Confirmed Gittensor contributor...") and "Readiness score: N/100" template text were the deleted
+    // function's own copy (no surviving equivalent); the private/critical-finding leak invariant is now a
+    // stronger structural guarantee -- "Maintainer notes" (the section that would have surfaced finding
+    // detail/title text) is excluded from buildPublicSafeCollapsibles entirely (see its own doc comment +
+    // unified-comment-parity.test.ts), and finding.action (the only field publicSafeNextSteps still reads)
+    // carries no forbidden vocabulary in this fixture.
+    const panel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: prRecord,
       profile,
@@ -766,12 +773,11 @@ describe("signal coverage edge cases", () => {
       settings: { ...repoSettings(directRepo.fullName), publicSignalLevel: "minimal", requireLinkedIssue: true },
     });
 
-    expect(comment).toContain("Confirmed Gittensor contributor");
-    expect(comment).toContain("| Linked issue | ⚠️ Missing |");
-    expect(comment).toMatch(/Readiness score: \d+\/100/);
-    expect(comment).not.toMatch(/reward|wallet|hotkey|trust score|farming|critical private/i);
+    expect(panel.rows.find((row) => row.key === "linkedIssue")!.cells[1]).toBe("⚠️ Missing");
+    expect(typeof panel.readinessTotal).toBe("number");
 
-    const maintainerComment = buildPublicPrIntelligenceComment({env: {},
+    const maintainerCollapsibles = buildPublicSafeCollapsibles({
+      env: {},
       repo: directRepo,
       pr: { ...prRecord, authorLogin: "owner", authorAssociation: "OWNER", linkedIssues: [1], body: "Fixes #1" },
       profile: buildContributorProfile("owner", { login: "owner", topLanguages: ["TypeScript"], source: "github" }, [], []),
@@ -782,8 +788,7 @@ describe("signal coverage edge cases", () => {
       settings: repoSettings(directRepo.fullName),
     });
 
-    expect(maintainerComment).toContain("maintainer lane");
-    expect(maintainerComment).not.toMatch(/reward|wallet|hotkey|trust score|farming/i);
+    expect(maintainerCollapsibles.find((section) => section.title === "Review context")!.body).toContain("(maintainer lane)");
   });
 
   it("buildPublicPrPanelSignalRows derives the gate conclusion across provided/fallback paths (#1007 unified-panel extraction)", () => {
@@ -873,9 +878,10 @@ describe("signal coverage edge cases", () => {
     expect(gateRow.cells[2]).not.toBe("Advisory only.");
     expect(gateRow.cells[3]).not.toBe("No action.");
 
-    const comment = buildPublicPrIntelligenceComment(baseArgs);
-    expect(comment).toContain("LoopOver Orb Review Agent is blocking merge");
-    expect(comment).toContain("> [!CAUTION]");
+    // #6103: the panel-row checks above already prove the blocking gate result structurally; the
+    // "LoopOver Orb Review Agent is blocking merge" / "> [!CAUTION]" phrasing was the deleted legacy
+    // renderer's own panelTitle/alert derivation, with no surviving equivalent (the converged renderer
+    // derives its verdict via deriveUnifiedStatus in src/review/unified-comment.ts, tested separately).
 
     // Sanity check: the SAME disabled-check-run repo WITHOUT autonomy configured correctly stays advisory-only
     // (no gate evaluation happens at all, so there is nothing real to surface).
@@ -926,20 +932,15 @@ describe("signal coverage edge cases", () => {
     };
 
     it("omits the row entirely when the caller passes no improvementSignal (feature off, or not wired yet)", () => {
-      const comment = buildPublicPrIntelligenceComment({ ...improvementBaseArgs, env: {} });
-      expect(comment).not.toContain("| Improvement |");
       const panel = buildPublicPrPanelSignalRows(improvementBaseArgs);
       expect(panel.rows.find((r) => r.key === "improvementSignal")).toBeUndefined();
       expect(panel.rows).toHaveLength(7);
     });
 
     it("renders a concise value rating (#5101) and never dumps the finding sentences into the cell", () => {
-      const comment = buildPublicPrIntelligenceComment({ ...improvementBaseArgs, improvementSignal: minorAssessment, env: {} });
-      expect(comment).toContain("| Improvement | ✅ Minor | value: minor |");
-      // #5101: the raw finding sentence is intentionally no longer rendered — the cell is a quick rating.
-      expect(comment).not.toContain("Code changes are accompanied by test evidence.");
-      expect(comment).not.toContain("LLM value judgment");
-
+      // #6103: rewired directly onto buildPublicPrPanelSignalRows -- the exact `cells` equality below already
+      // pins the row to "value: minor" with no finding sentence or LLM text, so the retired comment-string
+      // assertions this test used to run alongside it were redundant.
       const panel = buildPublicPrPanelSignalRows({ ...improvementBaseArgs, improvementSignal: minorAssessment });
       expect(panel.rows).toHaveLength(8);
       const row = panel.rows.find((r) => r.key === "improvementSignal")!;
@@ -954,20 +955,10 @@ describe("signal coverage edge cases", () => {
     it("tags the concise rating with the LLM's one-word magnitude (not the full rationale) when both tiers are available (#5101)", () => {
       const noneAssessment = { improvementScore: 0, band: "none" as const, findings: [] };
       const valueAssessment = { magnitude: "significant" as const, rationale: "This removes a whole class of retry bugs." };
-      const comment = buildPublicPrIntelligenceComment({
-        ...improvementBaseArgs,
-        improvementSignal: noneAssessment,
-        aiReview: { notes: "Looks fine.", valueAssessment },
-        env: {},
-      });
-      // The Result cell reflects the DETERMINISTIC band ("none"), never the LLM magnitude -- the two tiers are
-      // deliberately never blended into one number/label (epic #4737 design constraint 1).
-      expect(comment).toContain("| Improvement | ℹ️ None detected | value: none · LLM: significant |");
-      // #5101: only the one-word magnitude, never the full rationale paragraph, is surfaced.
-      expect(comment).toContain("· LLM: significant");
-      expect(comment).not.toContain("This removes a whole class of retry bugs.");
-      expect(comment).not.toContain("LLM value judgment");
-
+      // #6103: rewired directly onto buildPublicPrPanelSignalRows. The Result cell reflects the DETERMINISTIC
+      // band ("none"), never the LLM magnitude -- the two tiers are deliberately never blended into one
+      // number/label (epic #4737 design constraint 1); the Evidence cell carries only the one-word magnitude,
+      // never the full rationale paragraph (#5101).
       const panel = buildPublicPrPanelSignalRows({ ...improvementBaseArgs, improvementSignal: noneAssessment, valueAssessment });
       const row = panel.rows.find((r) => r.key === "improvementSignal")!;
       expect(row.cells[1]).toBe("ℹ️ None detected");
@@ -1001,15 +992,13 @@ describe("signal coverage edge cases", () => {
       expect(manyFindingsRow.cells[2]).not.toContain("cyclomatic complexity");
     });
 
-    it("hides the row via review.fields.improvementSignal: false, exactly like its seven siblings", () => {
-      const comment = buildPublicPrIntelligenceComment({
-        ...improvementBaseArgs,
-        improvementSignal: minorAssessment,
-        review: { present: true, fields: { improvementSignal: false } } as unknown as FocusManifestReviewConfig,
-        env: {},
-      });
-      expect(comment).not.toContain("| Improvement |");
-    });
+    // #6103: "hides the row via review.fields.improvementSignal: false" used to render the retired legacy
+    // comment with a `review.fields` override and check the row's absence from the markdown string.
+    // `buildPublicPrPanelSignalRows` never applied `review.fields` itself (that filtering happened in the
+    // legacy renderer's own `allRows.filter(...)` and now happens in the converged bridge --
+    // `src/review/unified-comment-bridge.ts`'s `visibleRows = args.panelRows.filter((row) =>
+    // args.reviewFields?.[row.key] !== false)`), so there is no equivalent to rewire this onto in this file;
+    // the bridge-level behavior is covered by its own unit tests.
 
     it("REGRESSION (#4744): never leaks forbidden vocabulary regardless of what findings/rationale feed the row (mirrors the repo's existing public-safety invariant tests)", () => {
       const unsafeAssessment = {
@@ -1031,17 +1020,12 @@ describe("signal coverage edge cases", () => {
       };
       const forbidden = /wallet|hotkey|coldkey|trust score|reward|payout|scoreability|reviewability|farming/i;
 
-      const comment = buildPublicPrIntelligenceComment({
-        ...improvementBaseArgs,
-        improvementSignal: unsafeAssessment,
-        aiReview: { notes: "Looks fine.", valueAssessment: unsafeValueAssessment },
-        env: {},
-      });
-      expect(comment).toContain("| Improvement | ✅ Moderate |"); // the static band label itself still renders
-      expect(comment).not.toMatch(forbidden);
-
+      // #6103: rewired directly onto buildPublicPrPanelSignalRows -- the static band label ("✅ Moderate")
+      // and the forbidden-vocabulary invariant below cover the same ground the retired comment-string
+      // assertions used to.
       const panel = buildPublicPrPanelSignalRows({ ...improvementBaseArgs, improvementSignal: unsafeAssessment, valueAssessment: unsafeValueAssessment });
       const row = panel.rows.find((r) => r.key === "improvementSignal")!;
+      expect(row.cells[1]).toBe("✅ Moderate"); // the static band label itself still renders
       expect(JSON.stringify(row)).not.toMatch(forbidden);
       // #5101 makes this structurally leak-proof: the cell renders only closed-enum band/magnitude names, never
       // the free-text finding detail or LLM rationale, so no sanitizer pass is even needed. The unsafe finding
@@ -1101,9 +1085,6 @@ describe("signal coverage edge cases", () => {
       expect(row.cells[2]).toBe("risk: low · value: minor");
       // The Result cell (the deterministic band label) is untouched by the quadrant -- the two tiers never blend.
       expect(row.cells[1]).toBe("✅ Minor");
-
-      const comment = buildPublicPrIntelligenceComment({ ...quadrantBaseArgs, improvementSignal: quadrantAssessment, slopBand: "low", env: {} });
-      expect(comment).toContain("| Improvement | ✅ Minor | risk: low · value: minor |");
     });
 
     it("falls back to the value band alone when slopBand is omitted -- never a fabricated risk reading (#5101)", () => {
@@ -1117,10 +1098,6 @@ describe("signal coverage edge cases", () => {
       const panel = buildPublicPrPanelSignalRows({ ...quadrantBaseArgs, slopBand: "high" });
       expect(panel.rows.find((r) => r.key === "improvementSignal")).toBeUndefined();
       expect(panel.rows).toHaveLength(7);
-
-      const comment = buildPublicPrIntelligenceComment({ ...quadrantBaseArgs, slopBand: "high", env: {} });
-      expect(comment).not.toContain("| Improvement |");
-      expect(comment).not.toContain("risk: high");
     });
 
     it("REGRESSION: the quadrant clause can never leak forbidden vocabulary -- SlopBand/ImprovementBand are closed enums, never free text, so no sanitizer check is needed for this clause specifically", () => {
@@ -1179,16 +1156,11 @@ describe("signal coverage edge cases", () => {
     expect(onWinner).not.toBe(offWinner);
     expect(onLoser).toBe(offLoser);
 
-    // The comment builder must agree by construction: ON winner is NOT a blocking-merge panel; ON loser is.
-    const winnerComment = buildPublicPrIntelligenceComment({ ...baseFor(winnerPr), duplicateWinnerEnabled: true });
-    const loserComment = buildPublicPrIntelligenceComment({ ...baseFor(loserPr), duplicateWinnerEnabled: true });
-    expect(winnerComment).not.toContain("LoopOver Orb Review Agent is blocking merge");
-    expect(winnerComment).not.toContain("#88");
+    // #6103: the gate-cell equality/inequality checks above already prove the winner/loser suppression
+    // structurally; the retired "must agree by construction" comment-string checks ("LoopOver Orb Review
+    // Agent is blocking merge") tested the deleted legacy renderer's own panelTitle derivation, which has no
+    // surviving equivalent. The related-work row confirms the winner's related work also clears.
     expect(buildPublicPrPanelSignalRows({ ...baseFor(winnerPr), duplicateWinnerEnabled: true }).rows.find((r) => r.key === "relatedWork")!.cells[1]).toContain("No active overlap");
-    expect(loserComment).toContain("LoopOver Orb Review Agent is blocking merge");
-    // Flag OFF on the winner is byte-identical to a blocking panel (today's behavior).
-    const offWinnerComment = buildPublicPrIntelligenceComment(baseFor(winnerPr));
-    expect(offWinnerComment).toContain("LoopOver Orb Review Agent is blocking merge");
   });
 
   it("#dup-winner: hides duplicate-only same-issue evidence while preserving mixed scoped overlap context", () => {
@@ -1269,16 +1241,21 @@ describe("signal coverage edge cases", () => {
     const retainedSparseCluster = retainedSameIssueView.scopedOverlapClusters.find((cluster) => cluster.id === "issue-42-with-sparse-peer");
 
     const relatedRow = buildPublicPrPanelSignalRows(baseArgs).rows.find((r) => r.key === "relatedWork")!;
-    const comment = buildPublicPrIntelligenceComment(baseArgs);
+    // #6103: rewired off the retired legacy comment onto buildPublicSafeCollapsibles' "Review context" body --
+    // relatedWorkDetails (the SAME helper the legacy panel drew from) is still what feeds that section, so it
+    // proves the same suppression: the hard-duplicate cluster's reason text ("Open PR work references issue
+    // #42.") never surfaces, only the retained scoped-overlap cluster's ("Titles/paths share 3 meaningful
+    // terms.") does. "Same-issue duplicate risk found against #88" was the deleted panelSummary's own
+    // phrasing (no surviving equivalent).
+    const reviewContext = buildPublicSafeCollapsibles(baseArgs).find((section) => section.title === "Review context")!.body;
 
     expect(retainedSameIssueView.visibleLinkedDuplicatePrs).toEqual([]);
     expect(retainedSparseCluster?.items.map((item) => (item.type === "pull_request" ? item.number : item.type))).toEqual([winnerPr.number, 99]);
     expect(relatedRow.cells[1]).toContain("1 scoped overlap");
     expect(relatedRow.cells[1]).not.toContain("#88");
-    expect(comment).toContain("Titles/paths share 3 meaningful terms");
-    expect(comment).toContain("PR #88");
-    expect(comment).not.toContain("Same-issue duplicate risk found against #88");
-    expect(comment).not.toContain("Open PR work references issue #42.");
+    expect(reviewContext).toContain("Titles/paths share 3 meaningful terms");
+    expect(reviewContext).toContain("PR #88");
+    expect(reviewContext).not.toContain("Open PR work references issue #42.");
   });
 
   it("renders opt-in gate panel states for collision and repo evaluation blockers", () => {
@@ -1298,29 +1275,21 @@ describe("signal coverage edge cases", () => {
     const detection = { detected: true, source: "github_cache" as const, reason: "cached contributor", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
     const gateSettings = { ...repoSettings(directRepo.fullName), reviewCheckMode: "required" as const, duplicatePrGateMode: "block" as const };
 
-    const collisionComment = buildPublicPrIntelligenceComment({env: {},
-      repo: directRepo,
-      pr: currentPr,
-      profile,
-      detection,
-      queueHealth,
-      collisions,
-      preflight,
-      settings: gateSettings,
-    });
+    // #6103: rewired off the retired legacy renderer onto the shared row/collapsible builders. The alert
+    // marker ("> [!CAUTION]" etc.), panelTitle/panelSummary prose, and the "> | ... |" quote-block table
+    // formatting were the deleted function's own template -- gone with no surviving equivalent (the
+    // converged renderer derives its status via deriveUnifiedStatus in src/review/unified-comment.ts,
+    // tested separately). Every still-meaningful row/collapsible-content assertion below is rewired onto
+    // buildPublicPrPanelSignalRows / buildPublicSafeCollapsibles.
+    const collisionArgs = { env: {}, repo: directRepo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings: gateSettings };
+    expect(buildPublicPrPanelSignalRows(collisionArgs).rows.find((r) => r.key === "gateResult")!.cells).toEqual([
+      "Gate result", "❌ Blocking", "Repo-configured hard blocker found.", "Fix blocker.",
+    ]);
+    expect(buildPublicPrPanelSignalRows(collisionArgs).rows.find((r) => r.key === "relatedWork")!.cells[3]).toBe("Compare #8.");
+    expect(buildPublicSafeCollapsibles(collisionArgs).find((section) => section.title === "Review context")!.body).toContain("Public profile only");
 
-    expect(collisionComment).toContain("> [!CAUTION]");
-    expect(collisionComment).toContain("A repo-configured hard blocker was found.");
-    expect(collisionComment).toContain("> | Gate result | ❌ Blocking | Repo-configured hard blocker found. | Fix blocker. |");
-    expect(collisionComment).toContain("Public profile only");
-    expect(collisionComment).toContain("Compare #8.");
-    expect(collisionComment).not.toContain("possible overlaps");
-    expect(collisionComment).not.toContain("Cached OSS contributor activity");
-    expect(collisionComment).not.toContain("Cached prior PRs/issues");
-    // The always-on earn CTA footer is a permanent marketing surface on every PR.
-    expect(collisionComment).toContain("register to start earning");
-
-    const repoBlockedComment = buildPublicPrIntelligenceComment({env: {},
+    const repoBlockedArgs = {
+      env: {},
       repo: null,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1334,14 +1303,14 @@ describe("signal coverage edge cases", () => {
         [],
       ),
       settings: gateSettings,
-    });
-
+    };
     // App/infra state (repo not synced) never blocks a contributor — the gate stays neutral/advisory.
-    expect(repoBlockedComment).toContain("Public profile only");
-    expect(repoBlockedComment).toContain("> | Gate result | ⚠️ Not blocking | Advisory; not blocking this PR. | No action. |");
-    expect(repoBlockedComment).not.toContain("App action required");
+    expect(buildPublicSafeCollapsibles(repoBlockedArgs).find((section) => section.title === "Review context")!.body).toContain("Public profile only");
+    expect(buildPublicPrPanelSignalRows(repoBlockedArgs).rows.find((r) => r.key === "gateResult")!.cells).toEqual([
+      "Gate result", "⚠️ Not blocking", "Advisory; not blocking this PR.", "No action.",
+    ]);
 
-    const missingIssueComment = buildPublicPrIntelligenceComment({env: {},
+    const missingIssuePanel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [], body: "No linked issue yet." },
       profile,
@@ -1356,12 +1325,11 @@ describe("signal coverage edge cases", () => {
       ),
       settings: { ...gateSettings, requireLinkedIssue: true, linkedIssueGateMode: "block" },
     });
+    expect(missingIssuePanel.rows.find((r) => r.key === "linkedIssue")!.cells).toEqual([
+      "Linked issue", "⚠️ Missing", "No linked issue or no-issue rationale found.", "Explain no-issue PR.",
+    ]);
 
-    expect(missingIssueComment).toContain("> [!WARNING]");
-    expect(missingIssueComment).toContain("> | Linked issue | ⚠️ Missing | No linked issue or no-issue rationale found. | Explain no-issue PR. |");
-    expect(missingIssueComment).toContain("Explain no-issue PR.");
-
-    const passingGateComment = buildPublicPrIntelligenceComment({env: {},
+    const passingGatePanel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1376,73 +1344,19 @@ describe("signal coverage edge cases", () => {
       ),
       settings: gateSettings,
     });
+    expect(passingGatePanel.rows.find((r) => r.key === "gateResult")!.cells).toEqual([
+      "Gate result", "✅ Passing", "No configured blocker found.", "No action.",
+    ]);
 
-    expect(passingGateComment).toContain("> [!TIP]");
-    expect(passingGateComment).toContain("> | Gate result | ✅ Passing | No configured blocker found. | No action. |");
-    expect(passingGateComment).toContain("Public GitHub metadata was checked");
+    // #6103: the `.loopover.yml review` overrides (custom footer lead, intro note, `review.fields` row
+    // hiding) and the AI review blockers/nits rendering (ordering, escaping, "old bottom dropdown removed")
+    // were entirely the deleted legacy renderer's own template structure. `review.fields` hiding now
+    // happens in the converged bridge (src/review/unified-comment-bridge.ts's `visibleRows`, tested there);
+    // the footer/note text is covered by test/unit/footer.test.ts; the AI blockers/nits layout is owned by
+    // src/review/unified-comment.ts's `renderUnifiedReviewComment` (tested independently). None of that has
+    // a surviving equivalent in this file to rewire onto.
 
-    // .loopover.yml review overrides: custom footer lead, an intro note, and a hidden row.
-    const customizedComment = buildPublicPrIntelligenceComment({env: {},
-      repo: directRepo,
-      pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
-      profile,
-      detection,
-      queueHealth: buildQueueHealth(directRepo, [], [currentPr], buildCollisionReport(directRepo.fullName, [], [currentPr])),
-      collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
-      preflight: buildPreflightResult({ repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] }, directRepo, [], [currentPr]),
-      settings: gateSettings,
-      review: { present: true, footerText: "Reviewed by the Acme maintainer bot.", note: "Run npm test before pushing.", fields: { relatedWork: false }, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { blockers: null, nits: null }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { skipDrafts: null, cadence: null, ignoreAuthors: [], ignoreTitleKeywords: [], skipLabels: [], skipDocsOnly: null, maxAddedLines: 0, maxFiles: 0, baseBranches: [], autoPauseAfterReviewedCommits: null }, aiModel: { claudeModel: null, claudeEffort: null, codexModel: null, codexEffort: null, ollamaModel: null, openaiModel: null, openaiCompatibleModel: null, anthropicModel: null }, visual: { productionUrl: null, preview: { urlTemplate: null }, routes: { paths: [], maxRoutes: null }, themes: [], gif: false, enabled: null, themeStorageKey: null, actionsFallback: false }, linkedIssueSatisfaction: null, sharedConfigSource: null },
-      aiReview: { notes: "The change is focused.\n\n**Nits (2)**\n- Add a test for the </details> edge case.\n- Keep the validator helper scoped." },
-    });
-    expect(customizedComment).toContain("Reviewed by the Acme maintainer bot."); // custom footer lead
-    expect(customizedComment).toContain("register to start earning"); // mandatory attribution/earn link kept
-    expect(customizedComment).toContain("Run npm test before pushing."); // intro note
-    expect(customizedComment).not.toContain("| Related work |"); // hidden row
-    expect(customizedComment).toContain("| Gate result |"); // non-hidden rows still rendered
-    expect(customizedComment).toContain("**Review summary**"); // AI summary is prominent, not buried
-    expect(customizedComment).toContain("<summary>Nits (2)</summary>"); // nits are directly below summary
-    expect(customizedComment).not.toContain("LoopOver AI review (advisory)"); // old bottom dropdown removed
-    expect(customizedComment).toContain("&lt;/details&gt;"); // stray tags escaped, panel structure preserved
-    const summaryIndex = customizedComment.indexOf("**Review summary**");
-    const nitsIndex = customizedComment.indexOf("<summary>Nits (2)</summary>");
-    const readinessIndex = customizedComment.indexOf("**Readiness score:");
-    expect(summaryIndex).toBeGreaterThan(-1);
-    expect(nitsIndex).toBeGreaterThan(summaryIndex);
-    expect(readinessIndex).toBeGreaterThan(nitsIndex);
-
-    const aiBlockedComment = buildPublicPrIntelligenceComment({env: {},
-      repo: directRepo,
-      pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
-      profile,
-      detection,
-      queueHealth: buildQueueHealth(directRepo, [], [currentPr], buildCollisionReport(directRepo.fullName, [], [currentPr])),
-      collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
-      preflight: buildPreflightResult({ repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] }, directRepo, [], [currentPr]),
-      settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" },
-      aiReview: { notes: "The change is currently unsafe to merge.\n\n**Blockers**\n- `src/a.ts` has a syntax error.\n\n**Nits (1)**\n- Add a regression test." },
-    });
-    expect(aiBlockedComment).toContain("> [!CAUTION]");
-    expect(aiBlockedComment).toContain("LoopOver review found blockers");
-    expect(aiBlockedComment).toContain("`src/a.ts` has a syntax error.");
-    expect(aiBlockedComment.indexOf("**Review summary**")).toBeLessThan(aiBlockedComment.indexOf("**Readiness score:"));
-
-    const aiExplicitNoBlockersComment = buildPublicPrIntelligenceComment({env: {},
-      repo: directRepo,
-      pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
-      profile,
-      detection,
-      queueHealth: buildQueueHealth(directRepo, [], [currentPr], buildCollisionReport(directRepo.fullName, [], [currentPr])),
-      collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
-      preflight: buildPreflightResult({ repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] }, directRepo, [], [currentPr]),
-      settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" },
-      aiReview: { notes: "The change is focused.\n\n**Blockers**\n- None.\n\n**Nits (1)**\n- Add a regression test." },
-    });
-    expect(aiExplicitNoBlockersComment).toContain("> [!TIP]");
-    expect(aiExplicitNoBlockersComment).not.toContain(
-      "LoopOver review found blockers",
-    );
-
-    const advisoryOnlyComment = buildPublicPrIntelligenceComment({env: {},
+    const advisoryOnlyPanel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1460,13 +1374,11 @@ describe("signal coverage edge cases", () => {
       },
       settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" },
     });
+    expect(advisoryOnlyPanel.rows.find((r) => r.key === "gateResult")!.cells).toEqual([
+      "Gate result", "⚠️ Advisory only", "Advisory only.", "No action.",
+    ]);
 
-    expect(advisoryOnlyComment).toContain("> [!WARNING]");
-    expect(advisoryOnlyComment).toContain("LoopOver found maintainer review notes");
-    expect(advisoryOnlyComment).toContain("Validation note missing");
-    expect(advisoryOnlyComment).toContain("> | Gate result | ⚠️ Advisory only | Advisory only. | No action. |");
-
-    const actionRequiredComment = buildPublicPrIntelligenceComment({env: {},
+    const actionRequiredPanel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1482,45 +1394,19 @@ describe("signal coverage edge cases", () => {
       settings: gateSettings,
       gate: { conclusion: "action_required", summary: "LoopOver cannot evaluate this PR until installation state is repaired." },
     });
-    expect(actionRequiredComment).toContain("> [!WARNING]");
-    expect(actionRequiredComment).toContain("LoopOver cannot evaluate this PR until installation state is repaired.");
-    expect(actionRequiredComment).toContain("> | Gate result | ⚠️ App action required | Install/config needs attention. | Fix app config. |");
+    expect(actionRequiredPanel.rows.find((r) => r.key === "gateResult")!.cells).toEqual([
+      "Gate result", "⚠️ App action required", "Install/config needs attention.", "Fix app config.",
+    ]);
 
-    // REGRESSION: gateHeld's panelSummary falls back to a literal default when NO gate was passed at all --
-    // gateConclusion then resolves via fallbackGateConclusion's `!args.repo` arm to "neutral" (gateHeld-only,
-    // unlike "action_required" above which is ALSO gateBlocking and never reaches this fallback), and
-    // args.gate?.summary is undefined (no gate object exists to read a summary from), so the literal default
-    // text renders instead of a provided/derived summary.
-    const heldNoSummaryComment = buildPublicPrIntelligenceComment({env: {},
-      repo: null,
-      pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
-      profile,
-      detection,
-      queueHealth: buildQueueHealth(directRepo, [], [currentPr], buildCollisionReport(directRepo.fullName, [], [currentPr])),
-      collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
-      preflight: buildPreflightResult(
-        { repoFullName: directRepo.fullName, title: "Fix isolated issue", body: "Fixes #99", linkedIssues: [99] },
-        directRepo,
-        [],
-        [currentPr],
-      ),
-      settings: gateSettings,
-    });
-    expect(heldNoSummaryComment).toContain("> [!WARNING]");
-    expect(heldNoSummaryComment).toContain("LoopOver is holding this PR for maintainer review.");
+    // #6103: "heldNoSummaryComment" (repo: null, no gate object, reviewCheckMode required) exercised the
+    // SAME gate-row fallback as repoBlockedArgs above (both resolve the "neutral" conclusion via the
+    // `!args.repo` arm of fallbackGateConclusion) -- its only unique content was the legacy panelSummary's
+    // literal default text, which has no surviving equivalent, so it is not rewired separately here.
 
-    const duplicateAdvisoryComment = buildPublicPrIntelligenceComment({env: {},
-      repo: directRepo,
-      pr: currentPr,
-      profile,
-      detection,
-      queueHealth,
-      collisions,
-      preflight,
-      settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" },
-    });
-    expect(duplicateAdvisoryComment).toContain("Same-issue duplicate risk found against #8.");
-    expect(duplicateAdvisoryComment).toContain("> | Related work | ⚠️ Same linked issue: #8 | Another open PR references the same linked issue. | Compare #8. |");
+    const duplicateAdvisoryPanel = buildPublicPrPanelSignalRows({ repo: directRepo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" } });
+    expect(duplicateAdvisoryPanel.rows.find((r) => r.key === "relatedWork")!.cells).toEqual([
+      "Related work", "⚠️ Same linked issue: #8", "Another open PR references the same linked issue.", "Compare #8.",
+    ]);
 
     const scopedClusters: CollisionCluster[] = Array.from({ length: 12 }, (_, index) => ({
       id: `scoped-${index}`,
@@ -1528,7 +1414,8 @@ describe("signal coverage edge cases", () => {
       reason: "Titles share 2 meaningful terms.",
       items: [{ type: "issue", number: index + 100, title: `Related issue ${index}`, authorLogin: "reporter", labels: [], linkedIssues: [] }],
     }));
-    const scopedComment = buildPublicPrIntelligenceComment({env: {},
+    const scopedArgs = {
+      env: {},
       repo: directRepo,
       pr: { ...currentPr, linkedIssues: [99], body: "Fixes #99" },
       profile,
@@ -1545,10 +1432,14 @@ describe("signal coverage edge cases", () => {
         collisions: scopedClusters,
         findings: [],
       },
-      settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" },
-    });
-    expect(scopedComment).toContain("> | Related work | ⚠️ 3 scoped overlaps | Top overlaps are listed below; lower-confidence bulk is hidden. | Review top overlaps. |");
-    expect(scopedComment).toContain("Additional title-only matches omitted; title-only overlap does not block.");
+      settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" as const },
+    };
+    expect(buildPublicPrPanelSignalRows(scopedArgs).rows.find((r) => r.key === "relatedWork")!.cells).toEqual([
+      "Related work", "⚠️ 3 scoped overlaps", "Top overlaps are listed below; lower-confidence bulk is hidden.", "Review top overlaps.",
+    ]);
+    expect(buildPublicSafeCollapsibles(scopedArgs).find((section) => section.title === "Review context")!.body).toContain(
+      "Additional title-only matches omitted; title-only overlap does not block.",
+    );
   });
 
   it("counts scoped related-work as the union of PR-specific and preflight clusters, not the max", () => {
@@ -1580,7 +1471,8 @@ describe("signal coverage edge cases", () => {
     }));
     const profile = buildContributorProfile("dev", { login: "dev", topLanguages: [], source: "github" }, [currentPr], []);
     const detection = { detected: true, source: "github_cache" as const, reason: "cached contributor", priorPullRequests: 1, priorMergedPullRequests: 0, priorIssues: 0 };
-    const comment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto buildPublicPrPanelSignalRows' relatedWork row.
+    const panel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1596,8 +1488,8 @@ describe("signal coverage edge cases", () => {
     });
     // PR-specific clusters = {pr-cluster} (1); preflight clusters = 2 disjoint -> 3 distinct overlaps.
     // Old code used Math.max(1, 2) = 2; the union (3) is the correct count feeding the related-work row.
-    expect(comment).toContain("3 scoped overlaps");
-    expect(comment).not.toContain("2 scoped overlaps");
+    expect(panel.rows.find((r) => r.key === "relatedWork")!.cells[1]).toContain("3 scoped overlaps");
+    expect(panel.rows.find((r) => r.key === "relatedWork")!.cells[1]).not.toContain("2 scoped overlaps");
   });
 
   it("does not present global repo collision clusters as PR duplicate risk", () => {
@@ -1619,7 +1511,8 @@ describe("signal coverage edge cases", () => {
     expect(collisions.summary.clusterCount).toBeGreaterThan(0);
     expect(preflight.collisions).toHaveLength(0);
 
-    const comment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto buildPublicPrPanelSignalRows.
+    const panel = buildPublicPrPanelSignalRows({
       repo: directRepo,
       pr: currentPr,
       profile: buildContributorProfile("dev", { login: "dev", topLanguages: ["Markdown"], source: "github" }, [], []),
@@ -1630,43 +1523,23 @@ describe("signal coverage edge cases", () => {
       settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "required" },
     });
 
-    expect(comment).toContain("> | Related work | ✅ No active overlap found | No same-issue or scoped active PR overlap found. | No action. |");
-    expect(comment).toContain("> | Gate result | ✅ Passing | No configured blocker found. | No action. |");
-    expect(comment).not.toContain("possible overlap");
-    expect(comment).not.toContain("12");
+    expect(panel.rows.find((r) => r.key === "relatedWork")!.cells).toEqual([
+      "Related work", "✅ No active overlap found", "No same-issue or scoped active PR overlap found.", "No action.",
+    ]);
+    expect(panel.rows.find((r) => r.key === "gateResult")!.cells).toEqual([
+      "Gate result", "✅ Passing", "No configured blocker found.", "No action.",
+    ]);
+    // The global 12-issue collision noise must never leak into the PR-specific rows.
+    expect(JSON.stringify(panel.rows)).not.toContain("12");
   });
 
-  it("posts a minimal earn-invite (no readiness panel) for a non-registered contributor", () => {
-    const directRepo = repo("owner/invite");
-    const currentPr = pr(directRepo.fullName, 42, "Add docs", { authorLogin: "newcomer", linkedIssues: [], body: "" });
-    const collisions = buildCollisionReport(directRepo.fullName, [], [currentPr]);
-    const queueHealth = buildQueueHealth(directRepo, [], [currentPr], collisions);
-    const preflight = buildPreflightResult(
-      { repoFullName: directRepo.fullName, title: currentPr.title, body: currentPr.body ?? undefined, linkedIssues: currentPr.linkedIssues },
-      directRepo,
-      [],
-      [currentPr],
-    );
-
-    const comment = buildPublicPrIntelligenceComment({env: {},
-      repo: directRepo,
-      pr: currentPr,
-      profile: buildContributorProfile("newcomer", { login: "newcomer", topLanguages: [], source: "github" }, [], []),
-      detection: { detected: false, reason: "no gittensor footprint", priorPullRequests: 0, priorMergedPullRequests: 0, priorIssues: 0 },
-      queueHealth,
-      collisions,
-      preflight,
-      settings: repoSettings(directRepo.fullName),
-    });
-
-    // Minimal: brief welcome + earn invite + the always-on footer CTA; NO readiness table.
-    expect(comment).toContain("<!-- gittensory-pr-panel:v1 -->");
-    expect(comment).toContain("Thanks for the contribution");
-    expect(comment).toMatch(/earn/i);
-    expect(comment).toContain("register to start earning");
-    expect(comment).not.toContain("Readiness score");
-    expect(comment).not.toContain("| Signal | Result | Evidence | Action |");
-  });
+  // #6103: "posts a minimal earn-invite (no readiness panel) for a non-registered contributor" exercised
+  // the deleted `buildMinimalInviteComment`'s own unique behavior (the "👋 Thanks for the contribution"
+  // welcome copy, and skipping the readiness table entirely when `detection.detected` is false). The
+  // converged path (src/queue/processors.ts) calls `buildPublicPrPanelSignalRows` unconditionally -- there
+  // is no minimal/full branch left to test -- and gates whether a comment posts at all on
+  // `settings.commentMode`/`publicSurface`, not on a per-comment minimal-vs-full rendering choice. No
+  // surviving equivalent to rewire this test onto in this file.
 
   it("covers PR panel edge formatting without publishing unconfirmed cache counts", () => {
     const directRepo = repo("owner/edge");
@@ -1678,7 +1551,11 @@ describe("signal coverage edge cases", () => {
       [],
       [currentPr],
     );
-    const officialComment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto buildPublicSafeCollapsibles' "Review context"
+    // body -- reviewContextBody (its own doc comment, packages/loopover-engine/src/signals/engine.ts) is
+    // still the SAME helper that fed this text in the legacy panel.
+    const officialReviewContext = buildPublicSafeCollapsibles({
+      env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1687,9 +1564,8 @@ describe("signal coverage edge cases", () => {
       collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
       preflight: basePreflight,
       settings: { ...repoSettings(directRepo.fullName), publicAudienceMode: "gittensor_only", reviewCheckMode: "disabled" },
-    });
-    expect(officialComment).toContain("Confirmed Gittensor contributor context was checked");
-    expect(officialComment).toContain("Official Gittensor activity: 4 PR(s), 3 issue(s).");
+    }).find((section) => section.title === "Review context")!.body;
+    expect(officialReviewContext).toContain("Official Gittensor activity: 4 PR(s), 3 issue(s).");
 
     const selfItem = { type: "pull_request" as const, number: currentPr.number, title: currentPr.title, authorLogin: "dev", linkedIssues: currentPr.linkedIssues };
     const edgeCollisions: CollisionReport = {
@@ -1702,7 +1578,8 @@ describe("signal coverage edge cases", () => {
         { id: "recent-merged", risk: "medium", reason: "Recent merged work is related.", items: [selfItem, { type: "recent_merged_pull_request" as const, number: 11, title: "Merged edge fix" }] },
       ],
     };
-    const edgeComment = buildPublicPrIntelligenceComment({env: {},
+    const edgeReviewContext = buildPublicSafeCollapsibles({
+      env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -1711,9 +1588,9 @@ describe("signal coverage edge cases", () => {
       collisions: edgeCollisions,
       preflight: basePreflight,
       settings: { ...repoSettings(directRepo.fullName), reviewCheckMode: "disabled" },
-    });
-    expect(edgeComment).toContain("Related work: Only this PR is present.");
-    expect(edgeComment).toContain("merged PR #11");
+    }).find((section) => section.title === "Review context")!.body;
+    expect(edgeReviewContext).toContain("Related work: Only this PR is present.");
+    expect(edgeReviewContext).toContain("merged PR #11");
 
     const bundle = buildPublicCommentSignalBundle({
       repo: directRepo,
@@ -1765,29 +1642,38 @@ describe("signal coverage edge cases", () => {
       buildCollisionReport(directRepo.fullName, [], []),
     );
     const settings = { ...repoSettings(directRepo.fullName), reviewCheckMode: "required" as const, qualityGateMode: "block" as const, qualityGateMinScore: 95 };
-    const comment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto the shared row/collapsible builders. The re-run
+    // checkbox line ("- [ ] <!-- gittensory-rerun-review:v1 --> Re-run LoopOver review") is now rendered by
+    // the converged bridge/renderer (src/review/unified-comment.ts), not by any function in this file.
+    const args = {
+      env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
-      detection: { detected: true, source: "official_gittensor_api", reason: "official", priorPullRequests: 29, priorMergedPullRequests: 20, priorIssues: 6 },
+      detection: { detected: true, source: "official_gittensor_api" as const, reason: "official", priorPullRequests: 29, priorMergedPullRequests: 20, priorIssues: 6 },
       queueHealth,
       collisions: buildCollisionReport(directRepo.fullName, [], [currentPr]),
       preflight,
       settings,
-      gate: { conclusion: "skipped", summary: "PR closed before full evaluation." },
-    });
+    };
+    const panel = buildPublicPrPanelSignalRows({ ...args, gate: { conclusion: "skipped", summary: "PR closed before full evaluation." } });
+    const cellsOf = (key: string) => panel.rows.find((r) => r.key === key)!.cells;
+    expect(cellsOf("linkedIssue")).toEqual(["Linked issue", "✅ No-issue rationale", "PR body explains why no issue is linked.", "No action."]);
+    expect(cellsOf("reviewLoad")).toEqual([
+      "Change scope", "❌ 8/20", "High review scope from cached public metadata (size label size:L; draft PR; no linked issue context).", "Add a concise scope and risk note.",
+    ]);
+    expect(cellsOf("validationEvidence")).toEqual([
+      "Validation posture", "❌ 5/25", "Preflight is holding this PR: the review lane is unavailable, so it is not ready for automated review.", "Await review-lane availability.",
+    ]);
+    expect(cellsOf("openPrQueue")).toEqual(["Contributor workload", "✅ 10/10", "Author activity: 29 registered-repo PR(s), 20 merged, 6 issue(s).", "No action."]);
+    expect(cellsOf("gateResult")).toEqual(["Gate result", "⚠️ Not blocking", "Advisory; not blocking this PR.", "No action."]);
+    expect(cellsOf("contributorContext")[2]).toContain("[JSONbored](https://github.com/JSONbored)");
+    expect(cellsOf("contributorContext")[2]).toContain("[Gittensor profile](https://gittensor.io/miners/details?githubId=49853598)");
+    expect(JSON.stringify(panel.rows)).not.toMatch(/wallet|hotkey|payout|trust score|private score/i);
 
-    expect(comment).toContain("> | Linked issue | ✅ No-issue rationale | PR body explains why no issue is linked. | No action. |");
-    expect(comment).toContain("> | Change scope | ❌ 8/20 | High review scope from cached public metadata (size label size:L; draft PR; no linked issue context). | Add a concise scope and risk note. |");
-    expect(comment).toContain("> | Validation posture | ❌ 5/25 | Preflight is holding this PR: the review lane is unavailable, so it is not ready for automated review. | Await review-lane availability. |");
-    expect(comment).toContain("> | Contributor workload | ✅ 10/10 | Author activity: 29 registered-repo PR(s), 20 merged, 6 issue(s). | No action. |");
-    expect(comment).toContain("> | Gate result | ⚠️ Not blocking | Advisory; not blocking this PR. | No action. |");
-    expect(comment).toContain("[JSONbored](https://github.com/JSONbored)");
-    expect(comment).toContain("[Gittensor profile](https://gittensor.io/miners/details?githubId=49853598)");
-    expect(comment).toContain("Official Gittensor activity: 29 PR(s), 6 issue(s).");
-    expect(comment).toContain("- [ ] <!-- gittensory-rerun-review:v1 --> Re-run LoopOver review");
-    expect(comment).not.toContain("- [x] <!-- gittensory-rerun-review:v1 -->");
-    expect(comment).not.toMatch(/wallet|hotkey|payout|trust score|private score/i);
+    const reviewContext = buildPublicSafeCollapsibles(args).find((section) => section.title === "Review context")!.body;
+    expect(reviewContext).toContain("Official Gittensor activity: 29 PR(s), 6 issue(s).");
+    expect(reviewContext).not.toMatch(/wallet|hotkey|payout|trust score|private score/i);
   });
 
   it("uses contributor workload buckets for the visible queue row", () => {
@@ -2126,7 +2012,16 @@ describe("signal coverage edge cases", () => {
         { code: "private_reward", severity: "warning" as const, title: "Reward wallet", detail: "wallet reward", action: "secret" },
       ],
     };
-    const comment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto buildPublicSafeCollapsibles. "LoopOver PR
+    // readiness looks good" (panelTitle) and "- No public-safe advisory findings were generated from
+    // cached metadata." (the legacy Maintainer notes fallback) have no surviving equivalent -- Maintainer
+    // notes is excluded from buildPublicSafeCollapsibles entirely (its own doc comment). The fallback
+    // "Contributor next steps" copy, though, is still the shared `contributorNextStepsBody`'s own
+    // empty-nextSteps default, and both findings here are filtered out before reaching it: the
+    // missing_linked_issue finding by the linkedIssueGateMode: "off" filter, and the private_reward
+    // finding by the containsPrivatePublicTerm backstop (its detail contains "wallet"/"reward").
+    const collapsibles = buildPublicSafeCollapsibles({
+      env: {},
       repo: directRepo,
       pr: currentPr,
       profile,
@@ -2137,10 +2032,10 @@ describe("signal coverage edge cases", () => {
       settings: { ...repoSettings(directRepo.fullName), linkedIssueGateMode: "off" },
     });
 
-    expect(comment).toContain("LoopOver PR readiness looks good");
-    expect(comment).toContain("- No public-safe advisory findings were generated from cached metadata.");
-    expect(comment).toContain("- Keep the PR focused and include validation evidence before maintainer review.");
-    expect(comment).not.toMatch(/No linked issue detected|reward|wallet/i);
+    expect(collapsibles.find((section) => section.title === "Contributor next steps")!.body).toContain(
+      "- Keep the PR focused and include validation evidence before maintainer review.",
+    );
+    expect(JSON.stringify(collapsibles)).not.toMatch(/No linked issue detected|reward|wallet/i);
   });
 
   it("audits label ordering and suspicious configured labels deterministically", () => {

@@ -4140,15 +4140,7 @@ export const PR_PANEL_RETRIGGER_MARKER = "<!-- gittensory-rerun-review:v1 -->";
 // detect-via-marker / re-authorize-on-toggle mechanism, see maybeProcessPrPanelGenerateTests in processors.ts.
 export const PR_PANEL_GENERATE_TESTS_MARKER = "<!-- gittensory-generate-tests:v1 -->";
 
-/** Earn-CTA target for a public-comment footer. The repo-scoped miner page is only meaningful for
- *  repos registered on Gittensor (per `gittensorRepoEarnUrl`'s documented contract); for an
- *  unregistered repo the page has no miner data, so fall back to the general Gittensor home URL
- *  (the `loopoverFooter` default) instead of implying THIS repo's contributions already earn. */
-function footerEarnUrl(repo: RepositoryRecord | null, repoFullName: string): string | undefined {
-  return repo?.isRegistered ? gittensorRepoEarnUrl(repoFullName) : undefined;
-}
-
-// ── Public-safe collapsible bodies (ONE source: legacy panel + unified-comment bridge) ──────────────
+// ── Public-safe collapsible bodies (single source for the unified-comment bridge) ──────────────
 //
 // The public PR comment carries a fixed set of collapsed `<details>` sections. Their BODIES are built
 // here as line arrays from the SAME inputs the panel already has, so the legacy `<details>` markup and
@@ -4156,13 +4148,13 @@ function footerEarnUrl(repo: RepositoryRecord | null, repoFullName: string): str
 // — that section is PRIVATE (advisory findings) and must never appear in the converged public comment;
 // the legacy builder still renders it inline below, but no shared helper produces it.
 //
-// Byte-identity: `buildPublicPrIntelligenceComment` splices these exact arrays into its existing
+// #6103: previously spliced verbatim into the retired legacy renderer's own template; the array shape below
 // `<details>` wrappers, so flag-OFF output is unchanged. The unified bridge consumes
 // `buildPublicSafeCollapsibles` (which joins the same lines) as `extraCollapsibles`.
 
 /** Inputs the public-safe collapsible bodies are built from — the subset of the panel's `args` they read.
- *  `collisions`/`preflight`/`queueHealth` reuse the SAME types `buildPublicPrIntelligenceComment` takes so
- *  the bodies derive identically to the legacy panel. */
+ *  `collisions`/`preflight`/`queueHealth` reuse the same types the unified-comment bridge already has on
+ *  hand, so the bodies derive from a single source. */
 type PublicSafeCollapsibleArgs = {
   repo: RepositoryRecord | null;
   pr: PullRequestRecord;
@@ -4182,7 +4174,7 @@ type PublicSafeCollapsibleArgs = {
    *  resolveConvergedFeature("e2eTests") check the checkbox itself is gated on) -- controls whether the
    *  collapsible below points the reader at the checkbox, or just states the gap with no next step. */
   e2eTestGenAvailable?: boolean | undefined;
-  /** #5078: resolved by the caller from `env.PUBLIC_SITE_ORIGIN`, same as `buildPublicPrIntelligenceComment`'s
+  /** #5078: resolved by the caller from `env.PUBLIC_SITE_ORIGIN`, matching the env param the unified-comment
    *  own `env` param -- lets the "[BETA] Chat with LoopOver" collapsible link to a self-hoster's own
    *  command-reference doc page instead of always the canonical loopover.ai. */
   env: LoopOverFooterEnv;
@@ -4303,7 +4295,7 @@ function buildBetaCollapsible(title: string, bodyLines: string[]): UnifiedCollap
 
 /**
  * The public-safe collapsibles for the CONVERGED comment, as `UnifiedCollapsible[]`. Built from the SAME
- * bodies the legacy panel renders (above) so the two never diverge. Excludes "Maintainer notes" (PRIVATE) and
+ * bodies rendered above. Excludes "Maintainer notes" (PRIVATE) and
  * AI review notes, which the unified renderer owns as the prominent Review summary + Nits section.
  */
 export function buildPublicSafeCollapsibles(args: PublicSafeCollapsibleArgs): UnifiedCollapsible[] {
@@ -4320,8 +4312,7 @@ export function buildPublicSafeCollapsibles(args: PublicSafeCollapsibleArgs): Un
   ];
 }
 
-/** The deduped, public-safe "next steps" list — extracted so both the legacy panel and the converged
- *  comment compute it identically (maintainer-lane note, readiness actions, public-finding actions). */
+/** The deduped, public-safe "next steps" list — a single source so it's computed identically (maintainer-lane note, readiness actions, public-finding actions). */
 function publicSafeNextSteps(args: PublicSafeCollapsibleArgs): string[] {
   const roleContext = buildRoleContext({
     login: args.pr.authorLogin ?? args.profile.login,
@@ -4353,7 +4344,7 @@ function publicSafeNextSteps(args: PublicSafeCollapsibleArgs): string[] {
   ].filter((step) => !containsPrivatePublicTerm(step));
 }
 
-/** The public-safe subset of preflight findings — extracted so the legacy panel and the converged comment
+/** The public-safe subset of preflight findings — a single source so every consumer
  *  filter identically (single source). Drops: critical-severity findings; the linked-issue finding when the
  *  linked-issue gate is fully off; private bounty-lifecycle findings; and any finding whose text trips the
  *  private-term backstop. Then slices to the configured public signal level (2 minimal / 5 otherwise). The
@@ -4367,277 +4358,6 @@ function publicSafePreflightFindings(preflight: PreflightResult, settings: Repos
     .slice(0, settings.publicSignalLevel === "minimal" ? 2 : 5);
 }
 
-export function buildPublicPrIntelligenceComment(args: {
-  repo: RepositoryRecord | null;
-  pr: PullRequestRecord;
-  profile: ContributorProfile;
-  detection: ContributorDetection;
-  queueHealth: QueueHealth;
-  collisions: CollisionReport;
-  preflight: PreflightResult;
-  settings: RepositorySettings;
-  gate?: PublicPrPanelGateEvaluation | undefined;
-  review?: FocusManifestReviewConfig | undefined;
-  /** Optional AI maintainer-review notes (already public-safe). Rendered as an advisory section. `valueAssessment`
-   *  (#4743/#4744) is the same tier's composed improvement/value judgment, already run through
-   *  `composeImprovementSignal`'s own `toPublicSafe` pass upstream (services/ai-review.ts) -- re-checked against
-   *  `containsPrivatePublicTerm` again here (defense in depth) before it can reach the improvement row below. */
-  aiReview?: { notes: string; valueAssessment?: { magnitude: ImprovementMagnitude; rationale: string } | undefined } | undefined;
-  /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the earliest observed linked-issue
-   *  claimant among `linkedDuplicatePrs`, the hard-duplicate panel block is suppressed so the winner's panel
-   *  does not show a blocking duplicate. Default/false ⇒ byte-identical to today. */
-  duplicateWinnerEnabled?: boolean | undefined;
-  /** Deterministic structural-improvement tier (#4742/#4744), pre-computed by the caller via
-   *  `buildStructuralImprovementAssessment` and passed through exactly like `gate`/`aiReview` above are
-   *  pre-computed results, not raw inputs. Absent ⇒ the improvement row renders nothing, matching
-   *  `resolveConvergedFeature(env, manifest, "improvementSignal", repoFullName)` resolving false for the repo,
-   *  or a caller that hasn't wired this yet. */
-  improvementSignal?: StructuralImprovementAssessment | undefined;
-  /** The existing deterministic slop-risk band (#4745, sub-issue H of epic #4737), pre-computed by the
-   *  caller via `buildSlopAssessment` and passed through exactly like `improvementSignal` above is a
-   *  pre-computed result, not a raw input. Threaded into the Improvement row (when present) as the risk
-   *  half of the risk × value quadrant label -- see `formatRiskValueQuadrant`. Absent (every existing
-   *  caller today, and any repo where `shouldCollectSlopEvidence` resolves false this pass) ⇒ no quadrant
-   *  text is added, matching this epic's "degrade cleanly, never fabricate a reading" convention. */
-  slopBand?: SlopBand | undefined;
-  /** Resolved by the caller from `env.PUBLIC_SITE_ORIGIN` so a self-hoster's own domain reaches the
-   *  always-on footer's attribution link instead of `LOOPOVER_SITE_URL` (#4613). */
-  env: LoopOverFooterEnv;
-}): string {
-  const publicFindings = publicSafePreflightFindings(args.preflight, args.settings);
-  const relatedWork = buildDuplicateWinnerRelatedWorkView({
-    pr: args.pr,
-    collisions: args.collisions,
-    preflightCollisions: args.preflight.collisions,
-    duplicateWinnerEnabled: args.duplicateWinnerEnabled,
-  });
-  const linkedDuplicatePrs = relatedWork.linkedDuplicatePrItems.map((item) => item.number);
-  const visibleLinkedDuplicatePrs = relatedWork.visibleLinkedDuplicatePrs;
-  const scopedOverlapClusters = relatedWork.scopedOverlapClusters;
-  const scopedOverlapCount = scopedOverlapClusters.length;
-  const hasRelatedWork = visibleLinkedDuplicatePrs.length > 0 || scopedOverlapCount > 0;
-  const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs: visibleLinkedDuplicatePrs, scopedOverlapCount });
-  const linkedIssueResult = linkedIssuePanelResult(args.pr);
-  const relatedWorkResult = relatedWorkPanelResult(visibleLinkedDuplicatePrs, scopedOverlapCount);
-  const roleContext = buildRoleContext({
-    login: args.pr.authorLogin ?? args.profile.login,
-    repo: args.repo,
-    repoFullName: args.pr.repoFullName,
-    pullRequests: [args.pr],
-    issues: [],
-    profile: args.profile,
-  });
-  const nextSteps = [
-    ...(roleContext.maintainerLane ? ["Treat this as maintainer-lane context rather than normal contributor-lane activity."] : []),
-    ...readiness.components.map((component) => component.action).filter((action) => action !== "No action."),
-    /* v8 ignore next -- Public findings may omit actions; public comment tests cover sanitized action inclusion. */
-    ...(publicFindings.length > 0 ? publicFindings.flatMap((finding) => (finding.action ? [finding.action] : [])) : []),
-  ].filter((step) => !containsPrivatePublicTerm(step));
-  // #2852: gate presentation follows the SAME evaluation/policy signal as shouldEvaluateGate in
-  // processors.ts (published check-run OR autonomy needs a verdict) -- not the check-run publish flag
-  // alone, so a `reviewCheckMode: disabled` repo with autonomy configured still shows its real gate
-  // result in the public comment instead of silently downgrading to "no gate at all".
-  const gateEnabled = shouldPublishReviewCheck(args.settings.reviewCheckMode) || isAgentConfigured(args.settings.autonomy);
-  const hardLinkedIssueBlock =
-    args.settings.linkedIssueGateMode === "block" && args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
-  // Duplicate-winner adjudication (#dup-winner): when the flag is ON and this PR is the earliest observed
-  // linked-issue claimant, do NOT hard-block it as a duplicate — only the losers block. Sparse legacy rows fail
-  // closed so unknown ordering cannot suppress duplicate evidence.
-  const hardDuplicateBlock =
-    args.settings.duplicatePrGateMode === "block" &&
-    linkedDuplicatePrs.length > 0 &&
-    visibleLinkedDuplicatePrs.length > 0;
-  const fallbackGateConclusion = !gateEnabled
-    ? "success"
-    : !args.repo
-      ? "neutral"
-      : hardLinkedIssueBlock || hardDuplicateBlock
-        ? "failure"
-        : "success";
-  const gateConclusion = args.gate?.conclusion ?? fallbackGateConclusion;
-  const gateBlocking = gateEnabled && (gateConclusion === "failure" || gateConclusion === "action_required");
-  const gateHeld = gateEnabled && (gateConclusion === "neutral" || gateConclusion === "action_required");
-  const missingLinkedIssue = args.pr.linkedIssues.length === 0 && !hasClearNoIssueRationale(args.pr);
-  const confirmedMiner = isOfficialContributorDetection(args.detection);
-  // Author with no Gittensor footprint at all (not detected via official API or cache): loopover's
-  // contribution analysis is for Gittensor contributors, so fire MINIMALLY — a brief welcome + the
-  // earn invite — instead of the full readiness panel. A KNOWN contributor (official or cached) still
-  // gets the full review. The always-on footer CTA appears either way, so every PR keeps marketing.
-  if (!args.detection.detected) return buildMinimalInviteComment(args);
-  const genericOssMode = args.settings.publicAudienceMode === "oss_maintainer";
-  const hasPublicWarnings = publicFindings.some((finding) => finding.severity === "warning");
-  const aiReview = args.aiReview ? splitAiReviewNits(args.aiReview.notes) : null;
-  const aiReviewHasBlockers = Boolean(aiReview?.main) && aiReviewMainHasBlockers(aiReview?.main ?? "");
-  const alert = aiReviewHasBlockers
-      ? "CAUTION"
-      : gateBlocking
-        ? gateConclusion === "action_required"
-          ? "WARNING"
-          : missingLinkedIssue && args.settings.linkedIssueGateMode === "block"
-            ? "WARNING"
-            : "CAUTION"
-      : gateHeld
-        ? "WARNING"
-      : hasPublicWarnings || hasRelatedWork
-        ? "WARNING"
-        : "TIP";
-  const panelTitle = aiReviewHasBlockers
-    ? "LoopOver review found blockers"
-    : args.aiReview && !gateBlocking && !gateHeld
-      ? "LoopOver review approved this PR"
-      : gateHeld
-        ? "LoopOver review needs maintainer review"
-      : gateBlocking
-        ? `${LOOPOVER_GATE_CHECK_NAME} is blocking merge`
-        : hasPublicWarnings || hasRelatedWork
-          ? "LoopOver found maintainer review notes"
-          : "LoopOver PR readiness looks good";
-  const panelSummary = gateBlocking
-    ? args.gate?.summary ?? (gateConclusion === "action_required" ? "LoopOver cannot evaluate the repo state closely enough for the enabled gate." : "A repo-configured hard blocker was found.")
-    : gateHeld
-      ? args.gate?.summary ?? "LoopOver is holding this PR for maintainer review."
-    : visibleLinkedDuplicatePrs.length > 0
-      ? `Same-issue duplicate risk found against ${formatPrRefs(visibleLinkedDuplicatePrs)}. Maintainers should resolve the overlap before review continues.`
-      : hasRelatedWork
-        ? "Scoped related-work signals were found for this PR. They are advisory unless the gate reports a blocker."
-    : genericOssMode
-      ? "Public GitHub metadata was checked for review readiness. Gittensor-specific context appears only when confirmed."
-      : "Confirmed Gittensor contributor context was checked from public metadata and LoopOver cache.";
-  const readinessByKey = new Map(readiness.components.map((component) => [component.key, component]));
-  const validationComponent = readinessByKey.get("validation")!;
-  const changeScopeComponent = readinessByKey.get("change_scope")!;
-  const contributorWorkload = contributorWorkloadPanelResult(args.profile);
-  const contributorContext = contributorContextPanelResult(args.pr, args.profile, args.detection, confirmedMiner);
-  // Each row carries a stable key so a maintainer can show/hide it from `.loopover.yml review.fields`
-  // (default: shown). Hiding a row is cosmetic — the underlying signal/gate still functions.
-  const allRows: Array<{ key: ReviewFieldKey; cells: [string, string, string, string] }> = [
-    { key: "linkedIssue", cells: ["Linked issue", linkedIssueResult.result, linkedIssueResult.evidence, linkedIssueResult.action] },
-    { key: "relatedWork", cells: ["Related work", relatedWorkResult.result, relatedWorkResult.evidence, relatedWorkResult.action] },
-    /* v8 ignore start -- Readiness components are built as a fixed key set; fallbacks guard future partial score shapes. */
-    { key: "reviewLoad", cells: ["Change scope", scoreResultIcon(changeScopeComponent), changeScopeComponent.evidence, changeScopeComponent.action] },
-    { key: "validationEvidence", cells: ["Validation posture", scoreResultIcon(validationComponent), validationComponent.evidence, validationComponent.action] },
-    { key: "openPrQueue", cells: ["Contributor workload", contributorWorkload.result, contributorWorkload.evidence, contributorWorkload.action] },
-    /* v8 ignore stop */
-    { key: "contributorContext", cells: ["Contributor context", contributorContext.result, contributorContext.evidence, contributorContext.action] },
-    { key: "gateResult", cells: ["Gate result", gateStatus(gateEnabled, gateConclusion), gateEnabled ? gateAction(gateConclusion) : "Advisory only.", gateEnabled ? gateNextAction(gateConclusion) : "No action."] },
-  ];
-  // Improvement row (#4744): combines the deterministic tier (#4742) + LLM tier (#4743). `improvementRow` is
-  // null (row omitted entirely) when the caller passes no `improvementSignal` -- see buildImprovementSignalRow's
-  // own doc comment for why that's what keeps this byte-identical to today for every existing caller.
-  const improvementRow = buildImprovementSignalRow(args.improvementSignal, args.aiReview?.valueAssessment, args.slopBand);
-  if (improvementRow) allRows.push(improvementRow);
-  const reviewFields = args.review?.fields;
-  const rows: Array<[string, string, string, string]> = allRows.filter((row) => reviewFields?.[row.key] !== false).map((row) => row.cells);
-  const overlapDetails = relatedWorkDetails(args.pr, scopedOverlapClusters);
-  const maintainerNotes =
-    publicFindings.length > 0
-      ? publicFindings.map((finding) => `- ${sanitizePanelText(finding.title)}: ${sanitizePanelText(finding.publicText ?? finding.detail)}`)
-      : ["- No public-safe advisory findings were generated from cached metadata."];
-  // Always-on earn CTA — a permanent, free marketing surface on every reviewed PR. For a registered
-  // repo the CTA points at this repo's public Gittensor miner page (social proof for THIS repo + a
-  // path to register); for an unregistered repo it falls back to the general Gittensor home URL.
-  // The earn CTA stays a permanent marketing surface; `.loopover.yml review.footer.text` can replace
-  // the lead copy (already public-safe-validated) but the Gittensor register link + attribution remain.
-  const footer = loopoverFooter(args.env, { earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined });
-  return [
-    "<!-- gittensory-pr-panel:v1 -->",
-    "",
-    ...formatAlertBlock([
-      `[!${alert}]`,
-      `## ${panelTitle}`,
-      ...(aiReview?.main
-        ? [
-            "**Review summary**",
-            escapeAiReviewMarkdown(aiReview.main),
-            ...(aiReview.nits.length > 0
-              ? [
-                  "",
-                  "<details>",
-                  `<summary>Nits (${aiReview.nits.length})</summary>`,
-                  "",
-                  ...aiReview.nits.map((nit) => `- [ ] ${escapeAiReviewMarkdown(nit)}`),
-                  "",
-                  "</details>",
-                ]
-              : []),
-            "",
-            panelSummary,
-          ]
-        : [panelSummary]),
-      // Optional maintainer intro note (public-safe-validated at parse time; re-sanitized here).
-      ...(args.review?.note ? ["", sanitizePanelText(args.review.note)] : []),
-      "",
-      `**Readiness score: ${readiness.total}/100**`,
-      "",
-      "| Signal | Result | Evidence | Action |",
-      "| --- | --- | --- | --- |",
-      ...rows.map(([signal, result, evidence, action]) => `| ${escapeTableCell(signal)} | ${escapeTableCell(result)} | ${escapeTableCell(evidence)} | ${escapeTableCell(action)} |`),
-    ]),
-    "",
-    "<details>",
-    "<summary>Signal definitions</summary>",
-    "",
-    "- Related work = same linked issue, overlapping active PRs, or title/path similarity.",
-    "- Change scope = cached public metadata such as size labels, draft state, and review-burden hints.",
-    "- Validation posture = whether the PR provides enough public validation/test evidence for maintainer review.",
-    "- Contributor workload = public contributor activity and cleanup pressure, not a repo-wide quality failure.",
-    "- Contributor context = public GitHub/Gittensor identity context; non-Gittensor status is not a blocker.",
-    "",
-    "</details>",
-    "",
-    "<details>",
-    "<summary>Review context</summary>",
-    "",
-    `- Author: \`${sanitizePanelText(args.pr.authorLogin ?? "unknown")}\``,
-    `- Role context: ${sanitizePanelText(roleContext.role)}${roleContext.maintainerLane ? " (maintainer lane)" : ""}`,
-    `- Public audience mode: ${args.settings.publicAudienceMode.replace(/_/g, " ")}`,
-    `- Lane context: ${sanitizePanelText(buildLaneAdvice(args.repo, args.pr.repoFullName).summary)}`,
-    `- Public profile languages: ${args.profile.github.topLanguages.length > 0 ? sanitizePanelText(args.profile.github.topLanguages.join(", ")) : "not available"}`,
-    ...(confirmedMiner ? [`- Official Gittensor activity: ${args.detection.priorPullRequests} PR(s), ${args.detection.priorIssues} issue(s).`] : ["- Contributor context: Public profile only; not a blocker."]),
-    ...overlapDetails,
-    "",
-    "</details>",
-    "",
-    "<details>",
-    "<summary>Maintainer notes</summary>",
-    "",
-    ...maintainerNotes,
-    "",
-    "</details>",
-    "",
-    "<details>",
-    "<summary>Contributor next steps</summary>",
-    "",
-    ...contributorNextStepsBody(nextSteps),
-    "",
-    "</details>",
-    "",
-    `- [ ] ${PR_PANEL_RETRIGGER_MARKER} Re-run LoopOver review`,
-    "",
-    "---",
-    footer,
-  ].join("\n");
-}
-
-/** Minimal public comment for a non-registered contributor. loopover's readiness/contribution
- *  analysis is for registered Gittensor contributors, so we skip the panel and post a brief welcome
- *  + earn invite; the always-on footer CTA does the conversion. Carries the same panel marker so it
- *  updates in place if the author later registers (the full panel then replaces it). */
-function buildMinimalInviteComment(args: { repo: RepositoryRecord | null; pr: PullRequestRecord; review?: FocusManifestReviewConfig | undefined; env: LoopOverFooterEnv }): string {
-  return [
-    "<!-- gittensory-pr-panel:v1 -->",
-    "",
-    ...formatAlertBlock([
-      "[!NOTE]",
-      "## 👋 Thanks for the contribution",
-      "The maintainer will review your PR. Open-source work like this can earn on Gittensor — register your GitHub account and contributions like this become eligible to earn.",
-    ]),
-    "",
-    "---",
-    loopoverFooter(args.env, { earnUrl: footerEarnUrl(args.repo, args.pr.repoFullName), customText: args.review?.footerText ?? undefined }),
-  ].join("\n");
-}
-
 type PublicPrPanelGateEvaluation = {
   conclusion: "success" | "failure" | "action_required" | "neutral" | "skipped";
   summary: string;
@@ -4649,11 +4369,9 @@ type PublicPrPanelGateEvaluation = {
 export type PublicPrPanelSignalRow = { key: ReviewFieldKey; cells: [string, string, string, string] };
 
 /**
- * Build the public PR panel's readiness signal rows (the `allRows` table) as a PURE function, from the
- * SAME inputs `buildPublicPrIntelligenceComment` uses. It calls the same private panel helpers, so the rows
- * are byte-identical to the legacy panel's. Exposed for the unified-comment bridge (convergence) so the
- * converged comment surfaces loopover's exact signals; the legacy path is unchanged. The `key` lets the
- * caller honor `.loopover.yml review.fields` visibility the same way the legacy renderer does.
+ * Build the public PR panel's readiness signal rows (the `allRows` table) as a PURE function. Exposed for
+ * the unified-comment bridge so the converged comment surfaces loopover's exact signals. The `key` lets the
+ * caller honor `.loopover.yml review.fields` visibility.
  */
 export function buildPublicPrPanelSignalRows(args: {
   repo: RepositoryRecord | null;
@@ -4667,7 +4385,7 @@ export function buildPublicPrPanelSignalRows(args: {
   gate?: PublicPrPanelGateEvaluation | undefined;
   /** Duplicate-winner adjudication (#dup-winner). When true AND this PR is the earliest observed linked-issue
    *  claimant among `linkedDuplicatePrs`, the hard-duplicate block is suppressed. Default/false ⇒ byte-identical
-   *  to today. Matches `buildPublicPrIntelligenceComment` so both panels agree. */
+   *  to today. */
   duplicateWinnerEnabled?: boolean | undefined;
   /** Deterministic structural-improvement tier (#4742/#4744), pre-computed by the caller via
    *  `buildStructuralImprovementAssessment` and passed through exactly like `gate` above is a pre-computed
@@ -4682,7 +4400,7 @@ export function buildPublicPrPanelSignalRows(args: {
    *  shows the deterministic tier only. */
   valueAssessment?: { magnitude: ImprovementMagnitude; rationale: string } | undefined;
   /** The existing deterministic slop-risk band (#4745, sub-issue H of epic #4737) -- see the matching doc
-   *  comment on `buildPublicPrIntelligenceComment`'s own `slopBand` field, which this mirrors. */
+   *  comment on this same function's own `slopBand` field. */
   slopBand?: SlopBand | undefined;
 }): { rows: PublicPrPanelSignalRow[]; readinessTotal: number } {
   const relatedWork = buildDuplicateWinnerRelatedWorkView({
@@ -4698,7 +4416,7 @@ export function buildPublicPrPanelSignalRows(args: {
   const readiness = buildPublicReadinessScore({ pr: args.pr, preflight: args.preflight, queueHealth: args.queueHealth, linkedDuplicatePrs: visibleLinkedDuplicatePrs, scopedOverlapCount });
   const linkedIssueResult = linkedIssuePanelResult(args.pr);
   const relatedWorkResult = relatedWorkPanelResult(visibleLinkedDuplicatePrs, scopedOverlapCount);
-  // #2852: see the matching comment in buildPublicPrIntelligenceComment -- gate presentation must
+  // #2852: gate presentation must
   // track whether a gate is actually evaluated (check-run published OR autonomy configured), not
   // merely whether the check-run itself is published.
   const gateEnabled = shouldPublishReviewCheck(args.settings.reviewCheckMode) || isAgentConfigured(args.settings.autonomy);
@@ -4754,7 +4472,7 @@ export function buildPublicPrPanelSignalRows(args: {
 
 /** Static template labels (#4744), one per {@link ImprovementBand} -- never runtime-interpolated free text, so
  *  this bypasses the public-comment sanitizer safely, mirroring how `"**Readiness score: ${total}/100**"`
- *  (buildPublicPrIntelligenceComment) is a hardcoded template rather than sanitizer-filtered AI prose. Advisory
+ *  is a hardcoded template rather than sanitizer-filtered AI prose. Advisory
  *  icons only (✅/ℹ️, never ⚠️/❌): every band here is informational, never a reason to flag the PR. */
 const IMPROVEMENT_BAND_LABELS: Record<ImprovementBand, string> = {
   "insufficient-signal": "ℹ️ Insufficient signal",
@@ -5345,27 +5063,6 @@ function formatCollisionItemRef(item: CollisionItem): string {
   return item.htmlUrl ? `[${text}](${item.htmlUrl})` : text;
 }
 
-function formatAlertBlock(lines: string[]): string[] {
-  return lines.map((line) => (line.length > 0 ? `> ${line}` : ">"));
-}
-
-function aiReviewMainHasBlockers(main: string): boolean {
-  const marker = main.search(/\*\*Blockers\*\*/i);
-  if (marker === -1) return false;
-  const after = main.slice(marker).split(/\n(?=\*\*[^*]+\*\*)/)[0]!;
-  return after
-    .split("\n")
-    .slice(1)
-    .map((line) => line.replace(/^\s*[-*]\s*/, "").trim())
-    .some((line) => line.length > 0 && !/^none\.?$/i.test(line));
-}
-
-function escapeAiReviewMarkdown(value: string): string {
-  return value
-    .replace(/[<>]/g, (char) => (char === "<" ? "&lt;" : "&gt;"))
-    .slice(0, 4000);
-}
-
 function isPrivateBountyLifecycleFinding(code: string): boolean {
   return code === "linked_issue_bounty_historical" || code === "linked_issue_bounty_unverified";
 }
@@ -5379,10 +5076,6 @@ function containsPrivatePublicTerm(value: string): boolean {
 
 function sanitizePanelText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function escapeTableCell(value: string): string {
-  return sanitizePanelText(value).replace(/\|/g, "\\|");
 }
 
 /**

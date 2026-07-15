@@ -452,7 +452,9 @@ describe("queue processors", () => {
     expect(patchCount).toBeGreaterThanOrEqual(1);
     expect(firstWriteWasPlaceholder).toBe(true);
     expect(stickyComment.current?.body).toContain(PR_PANEL_COMMENT_MARKER);
-    expect(stickyComment.current?.body).toContain("Thanks for the contribution");
+    // #6103: proves the real verdict overwrote the placeholder (not still "is reviewing") -- the converged
+    // renderer's own Suggested Action line, not the retired legacy renderer's "Thanks for the contribution".
+    expect(stickyComment.current?.body).toContain("Suggested Action");
     expect(stickyComment.current?.body).not.toContain("is reviewing");
   });
 
@@ -1061,7 +1063,9 @@ describe("queue processors", () => {
     expect(postCount).toBe(1);
     expect(patchCount).toBeGreaterThanOrEqual(1);
     expect(stickyComment.current?.body).toContain(PR_PANEL_COMMENT_MARKER);
-    expect(stickyComment.current?.body).toContain("Thanks for the contribution");
+    // #6103: proves the real verdict overwrote the placeholder (not still "is reviewing") -- the converged
+    // renderer's own Suggested Action line, not the retired legacy renderer's "Thanks for the contribution".
+    expect(stickyComment.current?.body).toContain("Suggested Action");
     expect(stickyComment.current?.body).not.toContain("is reviewing");
   });
 
@@ -1225,7 +1229,8 @@ describe("queue processors", () => {
     expect(commentBodies[0]).toContain("🟪");
     const finalComment = commentBodies.find((body) => !body.includes("is reviewing"));
     expect(finalComment).toBeDefined();
-    expect(finalComment).toContain("Readiness score");
+    // #6103: the converged renderer shows readiness as a `readiness N/100` status chip, not "Readiness score:" prose.
+    expect(finalComment).toMatch(/`readiness \d+\/100`/);
     expect(finalComment).not.toContain("stale cached nit");
     expect(finalComment).toContain("did not include a separate narrative summary");
     expect(finalComment).toContain("Add coverage for the new branch.");
@@ -1301,7 +1306,7 @@ describe("queue processors", () => {
     expect(commentBodies.length).toBeGreaterThanOrEqual(2);
     expect(commentBodies[0]).toContain("is reviewing");
     const finalComment = commentBodies.find((body) => !body.includes("is reviewing"));
-    expect(finalComment).toContain("LoopOver review needs maintainer review");
+    expect(finalComment).toContain("manual review recommended"); // #6103: converged headline wording
     expect(finalComment).toContain("AI review could not be completed for this PR head");
     expect(finalComment).not.toContain("The AI reviewer returned public review text but not the expected structured verdict");
     // #regate-churn: the "AI review could not be completed" outcome is now PERSISTED (so a repeated scheduled
@@ -1399,7 +1404,7 @@ describe("queue processors", () => {
     // The losing pass never called the AI a second time — it deferred to the lock instead of double-spending.
     expect(aiCalls).toBe(0);
     const finalComment = commentBodies.find((body) => !body.includes("is reviewing"));
-    expect(finalComment).toContain("LoopOver review needs maintainer review");
+    expect(finalComment).toContain("manual review recommended"); // #6103: converged headline wording
     expect(finalComment).toContain("AI review is already running for this PR head in another LoopOver pass");
     // A lock-contention placeholder must never be persisted at all (not even non-durably, #regate-churn) — the
     // concurrent pass it deferred to writes the REAL result within seconds, and replaying this placeholder for
@@ -1474,7 +1479,8 @@ describe("queue processors", () => {
     expect(aiRun).not.toHaveBeenCalled();
     expect(commentBodies.length).toBeGreaterThanOrEqual(2);
     const finalComment = commentBodies.find((body) => !body.includes("is reviewing"));
-    expect(finalComment).toContain("Readiness score");
+    // #6103: the converged renderer shows readiness as a `readiness N/100` status chip, not "Readiness score:" prose.
+    expect(finalComment).toMatch(/`readiness \d+\/100`/);
     expect(finalComment).not.toContain("AI review returned public review text");
     const audit = await env.DB.prepare("select event_type, metadata_json from audit_events where event_type = ?")
       .bind("github_app.ai_review_public_summary_missing")

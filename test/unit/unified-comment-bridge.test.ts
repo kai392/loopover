@@ -1308,8 +1308,11 @@ describe("buildClosedUnifiedCommentBody (closed/skipped PR through the unified r
 // queue/GitHub-client harness. The focused unit coverage here (open + closed body, marker single-source, flag
 // gate, Nit scrub) asserts the bridge contract the processor relies on; the e2e wiring is a separate task.
 
-describe("isUnifiedReviewCommentEnabled (flag-OFF selects the legacy path)", () => {
-  it("is OFF (legacy buildPublicPrIntelligenceComment path) when the flag is unset or falsy", () => {
+// #6103: the flag this function reads no longer selects between two comment renderers (the legacy
+// buildPublicPrIntelligenceComment path it used to gate was deleted, having no remaining production
+// caller) -- kept functionally inert so an operator's existing deployment config setting it doesn't error.
+describe("isUnifiedReviewCommentEnabled (pure flag parsing, now inert)", () => {
+  it("parses OFF when the flag is unset or falsy", () => {
     expect(isUnifiedReviewCommentEnabled({})).toBe(false);
     expect(isUnifiedReviewCommentEnabled({ LOOPOVER_REVIEW_UNIFIED_COMMENT: undefined })).toBe(false);
     expect(isUnifiedReviewCommentEnabled({ LOOPOVER_REVIEW_UNIFIED_COMMENT: "false" })).toBe(false);

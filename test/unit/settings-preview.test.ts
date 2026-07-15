@@ -449,7 +449,8 @@ describe("buildRepoSettingsPreview", () => {
       sample: { authorLogin: "miner", minerStatus: "confirmed", title: "Improve wallet hotkey trust score payout", body: "raw trust and scoreability /100 reviewability 5", labels: ["bug"], linkedIssues: [7] },
     });
     expect(preview.previewComment).not.toBeNull();
-    expect(preview.previewComment ?? "").toMatch(/Readiness score: \d+\/100/);
+    // #6103: the converged renderer shows readiness as a `readiness N/100` status chip, not "Readiness score:" prose.
+    expect(preview.previewComment ?? "").toMatch(/`readiness \d+\/100`/);
     expect(preview.previewComment ?? "").not.toMatch(/wallet|hotkey|trust score|raw trust|scoreability|payout|reward|farming|reviewability\s*\d/i);
   });
 

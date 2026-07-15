@@ -2,13 +2,14 @@
 //
 // A PURE, testable mapping from loopover's live PR-review data (the gate `GateCheckEvaluation`, the AI
 // `advisoryNotes` + consensus defect, the readiness signal rows + total, the footer) onto the ported
-// unified renderer (`renderUnifiedReviewComment`). Flag-gated and default-OFF in the processor; flag-OFF
-// keeps the legacy `buildPublicPrIntelligenceComment` path byte-identical.
+// unified renderer (`renderUnifiedReviewComment`). #6103: this is now the ONLY PR-comment renderer --
+// the legacy `buildPublicPrIntelligenceComment` path this used to sit alongside was deleted once it had
+// no remaining production caller.
 //
 // loopover's GATE stays authoritative: we pass the gate-derived `decision` into `buildUnifiedReviewInput`
 // so `deriveUnifiedStatus` lets it override the reviewer recommendations (the renderer already enforces
-// this). The output PREPENDS the exact panel marker the legacy body carries, so the existing in-place
-// upsert (`createOrUpdatePrIntelligenceComment`) updates the same comment instead of posting a duplicate.
+// this). The output PREPENDS the panel marker, so the existing in-place upsert
+// (`createOrUpdatePrIntelligenceComment`) updates the same comment instead of posting a duplicate.
 //
 // Public-safe: most inputs are already safe by construction — the AI notes via
 // `composeAdvisoryNotes`→`toPublicSafe`; the consensus-defect blocker via `toPublicSafe` (in
@@ -64,8 +65,7 @@ export { splitAiReviewNits } from "./ai-notes";
 // `warnings` (turned into Nits): they carry an AdvisoryFinding's raw title/action. The gate/check-run
 // path sanitizes those strings (sanitizeForCheckRun) before they reach GitHub, but this comment path
 // did not. Rather than trust that every present and FUTURE warning finding is benign, scrub Nits with a
-// boundary mirroring the check-run sanitizer + the legacy panel's private-term guard, and DROP a Nit
-// that still trips the guard. This never alters flag-OFF (the legacy panel keeps its own filtering).
+// boundary mirroring the check-run sanitizer's own private-term guard, and DROP a Nit that still trips it.
 //
 // Mirrors src/rules/advisory.ts CHECK_RUN_FORBIDDEN_TERMS (scrubbed → "[context]") and
 // src/signals/engine.ts containsPrivatePublicTerm (drop if still present). Kept inline so this module
@@ -114,7 +114,7 @@ export function verdictToRecommendation(verdict: Verdict): ReviewRecommendation 
   }
 }
 
-/** Derive an ok/warn/fail state from a legacy panel result cell's leading status icon (✅/⚠️/❌). */
+/** Derive an ok/warn/fail state from a panel result cell's leading status icon (✅/⚠️/❌). */
 function rowState(resultCell: string): UnifiedSignalRow["state"] {
   if (resultCell.startsWith("✅")) return "ok";
   if (resultCell.startsWith("❌")) return "fail";
@@ -129,11 +129,12 @@ function rowResultText(resultCell: string): string {
   return resultCell.replace(/^[✅⚠️❌ℹ️]+\s*/u, "").trim();
 }
 
-/** Map the legacy panel signal rows → the unified table's rows (label/state/result/evidence). The
- *  unified renderer adds its own "Code review" row first; these follow it (loopover's gate row included).
- *  `gates: true` only for the "Gate result" row (#6067) -- the ONLY row among these that can actually move
- *  the verdict; every other row's own Evidence/Action text already says it's advisory-only. Drives the split
- *  between the renderer's always-visible "Decision drivers" list and its collapsed advisory-signals fold. */
+/** Map the panel signal rows (buildPublicPrPanelSignalRows) → the unified table's rows
+ *  (label/state/result/evidence). The unified renderer adds its own "Code review" row first; these follow
+ *  it (loopover's gate row included). `gates: true` only for the "Gate result" row (#6067) -- the ONLY row
+ *  among these that can actually move the verdict; every other row's own Evidence/Action text already says
+ *  it's advisory-only. Drives the split between the renderer's always-visible "Decision drivers" list and
+ *  its collapsed advisory-signals fold. */
 export function panelRowsToSignalRows(rows: PublicPrPanelSignalRow[]): UnifiedSignalRow[] {
   return rows.map((row) => {
     const [label, result, evidence] = row.cells;
@@ -322,7 +323,7 @@ export type UnifiedCommentBridgeArgs = {
   aiReview?: { notes: string } | undefined;
   /** The advisory findings — the bridge recovers the `ai_consensus_defect` consensus blocker from here. */
   advisoryFindings?: AdvisoryFinding[] | undefined;
-  /** The legacy panel readiness signal rows (from `buildPublicPrPanelSignalRows`). */
+  /** The readiness signal rows (from `buildPublicPrPanelSignalRows`). */
   panelRows: PublicPrPanelSignalRow[];
   /** Which rows the maintainer kept visible (`.loopover.yml review.fields`); a key set to `false` is hidden. */
   reviewFields?: Partial<Record<PublicPrPanelSignalRow["key"], boolean>> | undefined;
@@ -822,7 +823,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
         : input.reviewerCount
       : 0;
 
-  // Honor `.loopover.yml review.fields` row visibility, exactly as the legacy panel does.
+  // Honor `.loopover.yml review.fields` row visibility.
   const visibleRows = args.panelRows.filter((row) => args.reviewFields?.[row.key] !== false);
   const signals = panelRowsToSignalRows(visibleRows);
 
@@ -921,7 +922,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
  * routed through `buildUnifiedCommentBody` so a comment that started life as a unified OPEN-PR comment keeps
  * its unified shape (and the SAME marker) when the PR closes, instead of being overwritten by the legacy
  * panel under the shared marker. A synthetic `skipped` gate maps (via `gateConclusionToVerdict`) to the
- * `comment` verdict → `advisory` status, matching the legacy panel's non-blocking NOTE tone. No AI review,
+ * `comment` verdict → `advisory` status (a non-blocking NOTE tone). No AI review,
  * no findings, and a single synthetic "Gate result — Skipped" signal row (the only signal we can assert for
  * a PR we never finished evaluating). Public-safe by construction: every string here is a static literal.
  */

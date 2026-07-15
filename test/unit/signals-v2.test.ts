@@ -19,7 +19,7 @@ import {
   buildMaintainerLaneReport,
   buildMaintainerPacket,
   buildPreflightResult,
-  buildPublicPrIntelligenceComment,
+  buildPublicSafeCollapsibles,
   buildPullRequestMaintainerPacket,
   buildPullRequestReviewIntelligence,
   buildQueueHealth,
@@ -2086,7 +2086,10 @@ describe("v2 signal builders", () => {
     );
     expect(activeBounty).toMatchObject({ lifecycle: "active", fundingStatus: "funded", consensusRisk: "medium" });
 
-    const comment = buildPublicPrIntelligenceComment({env: {},
+    // #6103: rewired off the retired legacy renderer onto the shared collapsible builder both the legacy
+    // panel and the converged comment always drew this "Review context" body from.
+    const collapsibles = buildPublicSafeCollapsibles({
+      env: {},
       repo,
       pr: { ...pullRequests[0]!, authorLogin: undefined, linkedIssues: [] },
       profile: noLanguageProfile,
@@ -2127,9 +2130,10 @@ describe("v2 signal builders", () => {
         aiReviewAllAuthors: false, closeOwnerAuthors: false,
       },
     });
-    expect(comment).toContain("Author: `unknown`");
-    expect(comment).toContain("Public profile only");
-    expect(comment).not.toMatch(/wallet|raw trust score|ranking/i);
+    const reviewContext = collapsibles.find((section) => section.title === "Review context")!.body;
+    expect(reviewContext).toContain("Author: `unknown`");
+    expect(reviewContext).toContain("Public profile only");
+    expect(JSON.stringify(collapsibles)).not.toMatch(/wallet|raw trust score|ranking/i);
   });
 });
 

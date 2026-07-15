@@ -23,7 +23,6 @@ import {
   buildPublicCommentSignalBundle,
   buildPullRequestMaintainerPacket,
   buildPullRequestReviewIntelligence,
-  buildPublicPrIntelligenceComment,
   buildQueueHealth,
   buildRegistryChangeReport,
   buildRepoFitRecommendation,
@@ -539,81 +538,14 @@ describe("world-class backend signals", () => {
       currentPr,
       priorPr,
     ], []);
-    const comment = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
-
     expect(detection.detected).toBe(true);
     expect(shouldPublishPrIntelligenceComment(settings, detection)).toBe(true);
-    expect(comment).toContain("<!-- gittensory-pr-panel:v1 -->");
-    expect(comment).not.toMatch(/wallet|raw trust score|ranking|farming|reward/i);
   });
 
-  it("scopes the earn-footer CTA to the repo miner page only when the repo is registered", () => {
-    const currentPr = pullRequests[0]!;
-    const settings = {
-      repoFullName: repo.fullName,
-      commentMode: "detected_contributors_only" as const,
-      publicAudienceMode: "gittensor_only" as const,
-      publicSignalLevel: "standard" as const,
-      checkRunMode: "off" as const,
-      checkRunDetailLevel: "minimal" as const,
-      regateSweepOrderMode: "staleness" as const,
-      reviewCheckMode: "disabled" as const,
-      gatePack: "gittensor" as const,
-      linkedIssueGateMode: "advisory" as const,
-      duplicatePrGateMode: "advisory" as const,
-      qualityGateMode: "advisory" as const,
-      slopGateMode: "off" as const,
-      mergeReadinessGateMode: "off" as const,
-      manifestPolicyGateMode: "off" as const,
-      selfAuthoredLinkedIssueGateMode: "advisory" as const,
-      linkedIssueSatisfactionGateMode: "off" as const,
-      firstTimeContributorGrace: false,
-      slopAiAdvisory: false,
-      qualityGateMinScore: null,
-      autoLabelEnabled: true,
-      gittensorLabel: "gittensor",
-      createMissingLabel: true,
-      publicSurface: "comment_and_label" as const,
-      includeMaintainerAuthors: false,
-      requireLinkedIssue: false,
-      backfillEnabled: true,
-      aiReviewMode: "off" as const,
-      aiReviewByok: false,
-      aiReviewAllAuthors: false, closeOwnerAuthors: false,
-    };
-    const collisions = buildCollisionReport(repo.fullName, issues, pullRequests);
-    const queueHealth = buildQueueHealth(repo, issues, pullRequests, collisions);
-    const preflight = buildPreflightResult({ repoFullName: repo.fullName, title: currentPr.title, body: "Fixes #7", linkedIssues: [7] }, repo, issues, pullRequests);
-    const repoEarnPage = `${GITTENSOR_HOME_URL}/miners/repository?name=${encodeURIComponent(repo.fullName)}&tab=miners`;
-    const homeCta = `(${GITTENSOR_HOME_URL})`;
-
-    // Detected contributor → full panel. Registered repo links the repo miner page; unregistered repo
-    // must NOT (the page has no miner data for an unregistered repo) and falls back to the home URL.
-    const priorPr: PullRequestRecord = { ...currentPr, number: 3, state: "closed", mergedAt: "2026-05-01T00:00:00.000Z" };
-    const detected = { ...detectGittensorContributor("oktofeesh1", currentPr, [currentPr, priorPr], []), source: "official_gittensor_api" as const };
-    const detectedProfile = buildContributorProfile("oktofeesh1", { login: "oktofeesh1", topLanguages: ["TypeScript"], source: "github" }, [currentPr, priorPr], []);
-    expect(detected.detected).toBe(true);
-
-    const registeredComment = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
-    expect(registeredComment).toContain(repoEarnPage);
-
-    const unregisteredRepo = { ...repo, isRegistered: false, registryConfig: null };
-    const unregisteredComment = buildPublicPrIntelligenceComment({env: {}, repo: unregisteredRepo, pr: currentPr, profile: detectedProfile, detection: detected, queueHealth, collisions, preflight, settings });
-    expect(unregisteredComment).not.toContain("/miners/repository");
-    expect(unregisteredComment).toContain(homeCta);
-
-    // Non-detected contributor → minimal invite. Same registration gating must hold there.
-    const undetected = detectGittensorContributor("brand-new-outsider", currentPr, [], []);
-    const undetectedProfile = buildContributorProfile("brand-new-outsider", { login: "brand-new-outsider", topLanguages: [], source: "github" }, [], []);
-    expect(undetected.detected).toBe(false);
-
-    const minimalRegistered = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
-    expect(minimalRegistered).toContain(repoEarnPage);
-
-    const minimalUnregistered = buildPublicPrIntelligenceComment({env: {}, repo: unregisteredRepo, pr: currentPr, profile: undetectedProfile, detection: undetected, queueHealth, collisions, preflight, settings });
-    expect(minimalUnregistered).not.toContain("/miners/repository");
-    expect(minimalUnregistered).toContain(homeCta);
-  });
+  // #6103: the registered-vs-unregistered earn-CTA scoping this test used to exercise through the retired
+  // legacy renderer's own footerEarnUrl helper is the SAME logic the converged path applies inline
+  // (processors.ts's loopoverFooter(env, { earnUrl: repo?.isRegistered ? gittensorRepoEarnUrl(...) : ... }))
+  // -- already covered directly by test/unit/footer.test.ts.
 
   it("builds a compact, source-free public AI signal bundle", () => {
     const sourceMarker = "SECRET_SOURCE_LINE_should_never_reach_ai_provider";
@@ -885,53 +817,6 @@ describe("world-class backend signals", () => {
     expect(opportunities.find((opportunity) => opportunity.repoFullName === issueDiscoveryRepo.fullName)?.warnings).toContain("This repo is not a direct-PR-first lane.");
   });
 
-  it("summarizes public comments at minimal signal level", () => {
-    const currentPr: PullRequestRecord = { ...pullRequests[0]!, linkedIssues: [], body: "" };
-    const detection = { ...detectGittensorContributor("newbie", currentPr, [], []), detected: true, source: "official_gittensor_api" as const, reason: "Official Gittensor API confirms this GitHub user." };
-    const collisions = buildCollisionReport(repo.fullName, issues, [currentPr]);
-    const queueHealth = buildQueueHealth(repo, issues, [currentPr], collisions);
-    const preflight = buildPreflightResult({ repoFullName: repo.fullName, title: currentPr.title, changedFiles: ["README.md"] }, repo, issues, [currentPr]);
-    const profile = buildContributorProfile("newbie", { login: "newbie", topLanguages: [], source: "unavailable" }, [], []);
-    const settings: RepositorySettings = {
-      repoFullName: repo.fullName,
-      commentMode: "all_prs",
-      publicAudienceMode: "gittensor_only",
-      publicSignalLevel: "minimal",
-      checkRunMode: "off",
-      checkRunDetailLevel: "minimal",
-      regateSweepOrderMode: "staleness",
-      reviewCheckMode: "disabled",
-      gatePack: "gittensor",
-      linkedIssueGateMode: "advisory",
-      duplicatePrGateMode: "advisory",
-      qualityGateMode: "advisory",
-      slopGateMode: "off",
-      mergeReadinessGateMode: "off",
-      manifestPolicyGateMode: "off",
-      selfAuthoredLinkedIssueGateMode: "advisory",
-      linkedIssueSatisfactionGateMode: "off",
-      firstTimeContributorGrace: false,
-      slopAiAdvisory: false,
-      qualityGateMinScore: null,
-      autoLabelEnabled: true,
-      gittensorLabel: "gittensor",
-      createMissingLabel: true,
-      publicSurface: "comment_and_label",
-      includeMaintainerAuthors: false,
-      requireLinkedIssue: false,
-      backfillEnabled: true,
-      aiReviewMode: "off" as const,
-      aiReviewByok: false,
-      aiReviewAllAuthors: false, closeOwnerAuthors: false,
-    };
-
-    const comment = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
-
-    expect(comment).toContain("| Linked issue | ⚠️ Missing | No linked issue or no-issue rationale found. | Explain no-issue PR. |");
-    expect(comment).toContain("Public profile languages: not available");
-    expect(comment).not.toMatch(/trust score|wallet|ranking/i);
-  });
-
   it("separates active and historical bounty lifecycle risk", () => {
     const active: BountyRecord = {
       id: "bounty-1",
@@ -998,50 +883,13 @@ describe("world-class backend signals", () => {
 
     const currentPr: PullRequestRecord = { ...pullRequests[0]!, body: "Fixes #7", linkedIssues: [7] };
     const publicPreflight = buildPreflightResult({ repoFullName: repo.fullName, title: currentPr.title, body: currentPr.body ?? undefined, linkedIssues: [7] }, repo, [openIssue], [], [completed]);
-    const publicComment = buildPublicPrIntelligenceComment({env: {},
-      repo,
-      pr: currentPr,
-      profile: buildContributorProfile("oktofeesh1", { login: "oktofeesh1", topLanguages: ["TypeScript"], source: "github" }, [currentPr], []),
-      detection: { ...detectGittensorContributor("oktofeesh1", currentPr, [currentPr], []), detected: true, source: "official_gittensor_api", reason: "Official Gittensor API confirms this GitHub user." },
-      queueHealth: buildQueueHealth(repo, [openIssue], [currentPr], buildCollisionReport(repo.fullName, [openIssue], [currentPr])),
-      collisions: buildCollisionReport(repo.fullName, [openIssue], [currentPr]),
-      preflight: publicPreflight,
-      settings: {
-        repoFullName: repo.fullName,
-        commentMode: "all_prs",
-        publicAudienceMode: "gittensor_only",
-        publicSignalLevel: "standard",
-        checkRunMode: "off",
-        checkRunDetailLevel: "minimal",
-        regateSweepOrderMode: "staleness",
-        reviewCheckMode: "disabled",
-        gatePack: "gittensor",
-        linkedIssueGateMode: "advisory",
-        duplicatePrGateMode: "advisory",
-        qualityGateMode: "advisory",
-        slopGateMode: "off",
-        mergeReadinessGateMode: "off",
-        manifestPolicyGateMode: "off",
-        selfAuthoredLinkedIssueGateMode: "advisory",
-      linkedIssueSatisfactionGateMode: "off",
-        firstTimeContributorGrace: false,
-        slopAiAdvisory: false,
-        qualityGateMinScore: null,
-        autoLabelEnabled: true,
-        gittensorLabel: "gittensor",
-        createMissingLabel: true,
-        publicSurface: "comment_and_label",
-        includeMaintainerAuthors: false,
-        requireLinkedIssue: false,
-        backfillEnabled: true,
-        aiReviewMode: "off",
-        aiReviewByok: false,
-        aiReviewAllAuthors: false, closeOwnerAuthors: false,
-      },
-    });
+    // #6103: bounty-lifecycle findings are private (isPrivateBountyLifecycleFinding), and the converged
+    // renderer's "Maintainer notes" section that would have surfaced them is deliberately excluded from
+    // buildPublicSafeCollapsibles entirely (see its own doc comment + the dedicated
+    // unified-comment-parity.test.ts assertion that "Maintainer notes" never appears in the public
+    // comment) -- a stronger guarantee than the retired legacy renderer's per-finding filter this test
+    // used to check.
     expect(publicPreflight.findings.map((finding) => finding.code)).toContain("linked_issue_bounty_historical");
-    expect(publicComment).not.toContain("Linked issue bounty is historical");
-    expect(publicComment).not.toContain("Issue #7 has a completed bounty");
   });
 
   it("includes linked PR validity when PR records are available", () => {

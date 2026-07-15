@@ -301,7 +301,6 @@ import {
   buildContributorStrategy,
   buildDuplicateWinnerRelatedWorkView,
   buildPreflightResult,
-  buildPublicPrIntelligenceComment,
   buildPublicPrPanelSignalRows,
   buildPublicReadinessScore,
   buildPublicSafeCollapsibles,
@@ -7700,22 +7699,13 @@ async function maybePublishPrPublicSurface(
   // a dry-run / pause / global-freeze publishes NOTHING (check-run, comment, label) — the gate verdict is still
   // computed + returned for the disposition logic, the writes are just suppressed + audited. (#dry-run-chokepoint)
   const mode = await resolveRepoActionMode(env, settings);
-  // Per-repo feature override (phase 2): the unified converged comment renders for THIS repo when the global
-  // LOOPOVER_REVIEW_UNIFIED_COMMENT kill-switch is ON and the repo's container-private `.loopover.yml`
-  // `features.unifiedComment` opts in — falling back to the LOOPOVER_REVIEW_REPOS allowlist when the manifest
-  // says nothing (byte-identical default). Computed once and used by both unified-comment sites below.
-  const unifiedCommentAllowed = await convergedFeatureActive(
-    env,
-    repoFullName,
-    "unifiedComment",
-  );
   // improvementSignal (#4744): the first real caller of #4738's activation wiring (epic #4737's config-as-code
   // foundation) -- nothing resolved this feature before this PR (see signals/improvement.ts's own header
-  // comment). Resolved once, independent of unifiedCommentAllowed above: it gates BOTH the deterministic
-  // tier's own computation further below (which has no AI dependency at all -- a paused repo, a non-reviewable
-  // author, or aiReviewMode: "off" still gets it) and, threaded into runAiReviewForAdvisory, the LLM tier's
-  // prompt addition (#4743). loadRepoFocusManifest is cached, so this second manifest resolution costs no
-  // extra fetch in the common case where something else already resolved it this pass.
+  // comment). Gates BOTH the deterministic tier's own computation further below (which has no AI dependency
+  // at all -- a paused repo, a non-reviewable author, or aiReviewMode: "off" still gets it) and, threaded
+  // into runAiReviewForAdvisory, the LLM tier's prompt addition (#4743). loadRepoFocusManifest is cached, so
+  // this second manifest resolution costs no extra fetch in the common case where something else already
+  // resolved it this pass.
   const improvementSignalAllowed = await convergedFeatureActive(
     env,
     repoFullName,
@@ -9242,9 +9232,8 @@ async function maybePublishPrPublicSurface(
               reviewSelfHostAiModel,
               reviewImpactMap,
               reviewCultureProfile,
-              // improvementSignal (#4744): resolved once above (independent of unifiedCommentAllowed), reused
-              // here so the LLM tier's value-assessment prompt addition (#4743) only fires when this repo has
-              // actually opted in.
+              // improvementSignal (#4744): resolved once above, reused here so the LLM tier's value-assessment
+              // prompt addition (#4743) only fires when this repo has actually opted in.
               improvementSignal: improvementSignalAllowed,
               // #regate-dup-prep: this call's own advisory lock is already claimed (by aiReviewCacheReadDecideAndRun's
               // caller, above) — pass it through so runAiReviewForAdvisory trusts it instead of re-claiming (and
@@ -9941,30 +9930,12 @@ async function maybePublishPrPublicSurface(
           })),
         })
       : undefined;
-    const commentArgs = {
-      repo,
-      pr,
-      profile,
-      detection,
-      queueHealth,
-      collisions,
-      preflight,
-      settings,
-      gate: gateEvaluation,
-      review: reviewConfig,
-      aiReview,
-      improvementSignal: structuralImprovementAssessment,
-      // #4745: the risk × value quadrant's risk half -- reuses the slop band already computed above (if any);
-      // never a second buildSlopAssessment call.
-      slopBand: slopBand ?? undefined,
-      duplicateWinnerEnabled,
-      env,
-    };
     let deterministicBody: string;
-    // Convergence (Stage D): when the unified-review-comment flag is ON, render the single converged comment
-    // (loopover shape + reviewbot's review folded in). The gate stays authoritative (passed as `decision`),
-    // and the body carries the SAME panel marker so the upsert updates in place. Flag-OFF (default) keeps the
-    // legacy panel byte-identical. Only the comment lane is affected; the gate check-run/labels/audit are not.
+    // Convergence (Stage D, #6103): the converged comment (loopover shape + reviewbot's review folded in) is
+    // the only comment path -- the legacy buildPublicPrIntelligenceComment panel was retired once it had no
+    // remaining production caller (settings-preview.ts's sample preview was migrated to this same renderer).
+    // The gate stays authoritative (passed as `decision`), and the body carries the SAME panel marker so the
+    // upsert updates in place.
     //
     // RECONCILIATION INVARIANT (#1016 — two-gate → one authoritative path; pinned by
     // test/unit/unified-comment-bridge.test.ts "reconciliation invariant"):
@@ -9979,7 +9950,21 @@ async function maybePublishPrPublicSurface(
     //      contradict the review-agent check-run conclusion.
     //   3. The `ai_consensus_defect` surfaces exactly ONCE — as the Code-review blocker — never also in the
     //      gate signal row (which renders only the conclusion-derived status text, not the defect string).
-    if (unifiedCommentAllowed && gateEvaluation) {
+    {
+      // #6103: the converged renderer is the only comment path (the legacy buildPublicPrIntelligenceComment
+      // panel was retired). When the gate was never evaluated for this repo (reviewCheckMode disabled AND no
+      // autonomy configured -- see shouldEvaluateGate above), synthesize a "skipped" gate for rendering
+      // purposes only, mirroring buildClosedUnifiedCommentBody's own pattern for the identical situation.
+      // This never touches the check-run/label/audit/disposition lanes (those still read the real,
+      // possibly-undefined `gateEvaluation`) -- only what this comment's verdict/"Gate result" row says.
+      const commentGateEvaluation: NonNullable<typeof gateEvaluation> = gateEvaluation ?? {
+        enabled: false,
+        conclusion: "skipped",
+        title: `${LOOPOVER_GATE_CHECK_NAME} skipped`,
+        summary: "Gate evaluation is not configured for this repository.",
+        blockers: [],
+        warnings: [],
+      };
       // FIX B: the unified comment's file count + visual-capture path filter need the real diff — reuse the
       // shared resolver (one resolve per review; inline-fetches when stored is still empty pre-detail-sync).
       const unifiedFiles = await getReviewFiles();
@@ -10025,7 +10010,7 @@ async function maybePublishPrPublicSurface(
         repoFullName,
       });
       // The public comment must match the authoritative Gate check-run conclusion.
-      const commentGate = gateEvaluation;
+      const commentGate = commentGateEvaluation;
       // Observability (#reviews-dashboard): record the would-be gate verdict so the Grafana panel shows the
       // merge/close/hold mix — the "are we rubber-stamping?" signal — even in advisory/dryRun (this is the rendered verdict).
       incr("loopover_gate_decisions_total", {
@@ -10337,8 +10322,6 @@ async function maybePublishPrPublicSurface(
         // render warnings from the full/private manifest here.
         manifestWarnings: publicRepoFocusManifestForComment?.warnings ?? [],
       });
-    } else {
-      deterministicBody = buildPublicPrIntelligenceComment(commentArgs);
     }
     try {
       await withReviewPipelineSpan(

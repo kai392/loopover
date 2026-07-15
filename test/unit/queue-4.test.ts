@@ -1855,9 +1855,13 @@ describe("queue processors", () => {
 
     // token: 1 — the installation token is now cached + reused within the request (was 2: main + permission check).
     // commentGets/commentPatches: 2 — first the purple reviewing placeholder, then the final refreshed panel.
-    expect(calls).toEqual({ token: 1, permission: 1, minerList: 1, commentGets: 2, commentPatches: 2, checkRuns: 0 });
+    // checkRuns: 1 (#6103) — the converged renderer (now the only comment path) reads LIVE CI check-run state
+    // for its merge-readiness facts (the `CI green/pending/failing` chip); the retired legacy renderer never
+    // read live CI at all, so this repo's checkRunMode: "off" previously meant zero check-run reads too.
+    expect(calls).toEqual({ token: 1, permission: 1, minerList: 1, commentGets: 2, commentPatches: 2, checkRuns: 1 });
     expect(patchedBody).toContain("<!-- gittensory-pr-panel:v1 -->");
-    expect(patchedBody).toContain("Readiness score:");
+    // #6103: the converged renderer shows readiness as a `readiness N/100` status chip, not "Readiness score:" prose.
+    expect(patchedBody).toMatch(/`readiness \d+\/100`/);
     expect(patchedBody).toContain("- [ ] <!-- gittensory-rerun-review:v1 --> Re-run LoopOver review");
     expect(patchedBody).not.toContain("- [x] <!-- gittensory-rerun-review:v1 -->");
     const audit = await env.DB.prepare("select event_type, actor, target_key, outcome from audit_events where event_type = ?")
@@ -2708,12 +2712,11 @@ describe("queue processors", () => {
     expect(skipped.results.map((event) => event.detail)).toEqual(expect.arrayContaining(["not_official_gittensor_miner", "missing_author"]));
   });
 
-  // #1007 convergence (Stage D): with LOOPOVER_REVIEW_UNIFIED_COMMENT on AND the gate evaluating, the public PR-panel
-  // comment is rendered by the UNIFIED renderer (GitHub alert + synthesized "Code review" row) instead of the
-  // legacy panel — while STILL leading with the same panel marker so the in-place upsert updates the same
-  // comment. Mirrors the legacy panel-posting setup (confirmed miner + comment_and_label) but flips the flag
-  // and enables the gate so `maybePublishPrPublicSurface` takes the flag-ON branch.
-  it("renders the unified PR-review comment when the flag is on and the gate evaluates", async () => {
+  // #1007 convergence (Stage D) / #6103: the public PR-panel comment is rendered by the UNIFIED renderer
+  // (GitHub alert + synthesized "Code review" row / Decision drivers) unconditionally now -- leading with
+  // the same panel marker so the in-place upsert updates the same comment. `LOOPOVER_REVIEW_UNIFIED_COMMENT`
+  // below is kept for historical parity with sibling tests; it's inert (no longer read for this decision).
+  it("renders the unified PR-review comment when the gate evaluates", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), LOOPOVER_REVIEW_UNIFIED_COMMENT: "1" });
     await persistRegistrySnapshot(
       env,

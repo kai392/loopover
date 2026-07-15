@@ -3,7 +3,6 @@ import {
   buildCollisionReport,
   buildContributorProfile,
   buildPreflightResult,
-  buildPublicPrIntelligenceComment,
   buildPublicPrPanelSignalRows,
   buildPublicSafeCollapsibles,
   buildQueueHealth,
@@ -104,7 +103,10 @@ function gate(over: Partial<GateCheckEvaluation> = {}): GateCheckEvaluation {
   };
 }
 
-describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
+// #6103: the legacy buildPublicPrIntelligenceComment panel was retired (the converged renderer is the only
+// comment path now) -- this file no longer tests parity BETWEEN two renderers, just the shared public-safe
+// collapsible machinery (buildPublicSafeCollapsibles) the converged renderer alone consumes.
+describe("converged comment public-safe collapsibles (#unified-comment)", () => {
   it("the flag-ON converged body carries the public-safe collapsibles and NEVER the private 'Maintainer notes'", () => {
     const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
     const aiReview = { notes: "Looks reasonable. Add a regression test for reconnect.", reviewerCount: 2 };
@@ -152,21 +154,9 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
     expect(JSON.stringify(collapsibles)).not.toMatch(/maintainer notes/i);
   });
 
-  it("the public-safe collapsible bodies are byte-identical to the legacy panel's <details> bodies", () => {
+  it("the 'Contributor next steps' collapsible body is populated from the deduped next-steps list", () => {
     const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
-    const aiReview = { notes: "Looks reasonable. Add a regression test for reconnect.", reviewerCount: 2 };
-    const legacy = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings, aiReview });
     const collapsibles = buildPublicSafeCollapsibles({ repo, pr: currentPr, profile, detection, settings, collisions, preflight, queueHealth, env: {} });
-
-    // Each shared collapsible body's individual lines must appear verbatim in the legacy panel so the two
-    // renderers can never diverge on the public-safe content.
-    for (const section of collapsibles) {
-      for (const line of section.body.split("\n")) {
-        if (line.trim() === "") continue;
-        expect(legacy).toContain(line);
-      }
-    }
-    // The "Contributor next steps" body is single-sourced with the legacy panel's deduped next-steps list.
     const nextSteps = collapsibles.find((section) => section.title === "Contributor next steps")!;
     expect(nextSteps.body.length).toBeGreaterThan(0);
   });
@@ -202,12 +192,6 @@ describe("converged comment ↔ legacy panel parity (#unified-comment)", () => {
         "- Keep the PR focused and include validation evidence before maintainer review.",
       ]);
     });
-  });
-
-  it("the legacy panel still renders 'Maintainer notes' inline (private section is unchanged, just not shared)", () => {
-    const { currentPr, detection, collisions, queueHealth, preflight, profile } = buildFixtures();
-    const legacy = buildPublicPrIntelligenceComment({env: {}, repo, pr: currentPr, profile, detection, queueHealth, collisions, preflight, settings });
-    expect(legacy).toContain("Maintainer notes");
   });
 
   // #4589: the "Test coverage" collapsible reuses the already-computed manifest_missing_tests finding rather

@@ -9,17 +9,20 @@ import {
   buildCollisionReport,
   buildContributorProfile,
   buildPreflightResult,
-  buildPublicPrIntelligenceComment,
+  buildPublicPrPanelSignalRows,
   buildPublicReadinessScore,
   buildQueueHealth,
   type ContributorDetection,
 } from "./engine";
 import { buildExtensionPrStatus, type ExtensionPrStatus } from "./extension-contributor-context";
 import { REQUIRED_INSTALLATION_PERMISSIONS } from "../github/backfill";
-import type { LoopOverFooterEnv } from "../github/footer";
+import { loopoverFooter, type LoopOverFooterEnv } from "../github/footer";
+import type { GateCheckConclusion, GateCheckEvaluation } from "../rules/advisory";
 import { LOOPOVER_GATE_CHECK_NAME, shouldPublishReviewCheck } from "../review/check-names";
 import { decideReviewEligibility } from "../review/review-eligibility";
+import { buildUnifiedCommentBody } from "../review/unified-comment-bridge";
 import { requiredAgentActionPermissions } from "../settings/agent-execution";
+import { isAgentConfigured } from "../settings/autonomy";
 
 export function hasVisiblePrSurface(settings: RepositorySettings): boolean {
   return settings.publicSurface !== "off" || settings.checkRunMode === "enabled" || shouldPublishReviewCheck(settings.reviewCheckMode);
@@ -722,5 +725,40 @@ function buildSamplePreviewComment(args: {
     args.issues,
     args.pullRequests,
   );
-  return buildPublicPrIntelligenceComment({ repo: args.repo, pr: samplePr, profile, detection, queueHealth, collisions, preflight, settings: args.settings, env: args.env });
+
+  // Simulated gate verdict for this sample PR (#6103: migrated off the retired legacy renderer). Mirrors
+  // the same enabled / hard-linked-issue-block heuristic the shared panel builder used to fall back on
+  // internally when no real gate had run -- a duplicate-PR block is never simulated here since the
+  // synthetic PR #0 can't realistically collide with anything in this repo's real open PRs.
+  const gateEnabled = shouldPublishReviewCheck(args.settings.reviewCheckMode) || isAgentConfigured(args.settings.autonomy);
+  const hardLinkedIssueBlock = args.settings.linkedIssueGateMode === "block" && samplePr.linkedIssues.length === 0;
+  const gateConclusion: GateCheckConclusion = !gateEnabled ? "success" : hardLinkedIssueBlock ? "failure" : "success";
+  const gate: GateCheckEvaluation = {
+    enabled: gateEnabled,
+    conclusion: gateConclusion,
+    title: !gateEnabled ? `${LOOPOVER_GATE_CHECK_NAME} not configured` : gateConclusion === "failure" ? `${LOOPOVER_GATE_CHECK_NAME} failed` : `${LOOPOVER_GATE_CHECK_NAME} passed`,
+    summary: "Simulated for this settings preview — no live gate evaluation ran.",
+    blockers: [],
+    warnings: [],
+  };
+
+  const { rows, readinessTotal } = buildPublicPrPanelSignalRows({
+    repo: args.repo,
+    pr: samplePr,
+    profile,
+    detection,
+    queueHealth,
+    collisions,
+    preflight,
+    settings: args.settings,
+    gate: { conclusion: gateConclusion, summary: gate.summary },
+  });
+
+  return buildUnifiedCommentBody({
+    gate,
+    panelRows: rows,
+    readinessTotal,
+    changedFiles: 0,
+    footerMarkdown: loopoverFooter(args.env, {}),
+  });
 }

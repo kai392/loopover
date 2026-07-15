@@ -5541,9 +5541,6 @@ describe("queue processors", () => {
       const env = createTestEnv({
         GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(),
         LOOPOVER_REVIEW_E2E_TESTS: "true",
-        // The checkbox/collapsible only render via the CONVERGED comment builder (buildUnifiedCommentBody);
-        // the legacy buildPublicPrIntelligenceComment path has neither and must be opted out of here too.
-        LOOPOVER_REVIEW_UNIFIED_COMMENT: "true",
       });
       const slash = repoFullName.indexOf("/");
       await upsertRepositoryFromGitHub(env, { name: repoFullName.slice(slash + 1), full_name: repoFullName, private: false, owner: { login: "JSONbored" } }, 123);
@@ -5554,11 +5551,10 @@ describe("queue processors", () => {
         publicSurface: "comment_and_label",
         autoLabelEnabled: false,
         checkRunMode: "off",
-        // reviewCheckMode MUST be "required" (not "disabled") -- maybePublishPrPublicSurface only takes the
-        // UNIFIED renderer branch when BOTH unifiedCommentAllowed AND gateEvaluation are truthy; gateEvaluation
-        // is never computed at all when the gate is off, silently falling back to the legacy panel (which has
-        // neither the Test coverage collapsible nor the generate-tests checkbox). Mirrors the settings shape
-        // of the pre-existing "renders the unified PR-review comment..." test above.
+        // reviewCheckMode MUST be "required" (not "disabled") -- gateEvaluation is never computed at all when
+        // the gate is off (#6103: the renderer then falls back to a synthetic "skipped" gate for rendering
+        // purposes only), and this test needs the REAL evaluated gate's data for the checkbox/collapsible to
+        // render. Mirrors the settings shape of the pre-existing "renders the unified PR-review comment..." test above.
         reviewCheckMode: "required",
         requireLinkedIssue: false,
         linkedIssueGateMode: "off",
