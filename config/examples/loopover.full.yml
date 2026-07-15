@@ -430,14 +430,11 @@ gate:
 
 
 # ----------------------------------------------------------------------------
-# 3. GENERIC SETTINGS (`settings:`) — dashboard-equivalent overrides
+# 3. REVIEW OUTPUT (`review:`) — tune review behavior + comment content
 # ----------------------------------------------------------------------------
-# Everything a maintainer can toggle in the dashboard can be set here as code.
-# All values shown are the safe defaults; delete any line to inherit it.
-#
-# Review output controls. These tune review output without changing the
-# deterministic gate policy above. Omit the block to keep the byte-identical
-# defaults.
+# These tune review output/behavior and PR-comment content, without changing the
+# deterministic gate policy above. All values shown as `# key: value` comments are the
+# safe defaults; omit or delete a line to keep the byte-identical default.
 #
 # SELF-HOST ONLY (`review.shared_config`, #2046): when `LOOPOVER_REPO_CONFIG_DIR` is mounted,
 # place a shared review base at `${LOOPOVER_REPO_CONFIG_DIR}/_shared/.loopover.yml` (see
@@ -586,6 +583,153 @@ review:
   # (CI green, gate passing, mergeable-clean, valid linked issue). SURFACE ONLY — never changes the decision.
   # auto_merge_summary: false
 
+  # Maintainer AI review-prompt + panel-content tuning (#6071 -- merged in from a second,
+  # disconnected `review:` block that used to live ~500 lines further down in this file).
+  # These shape the advisory AI review prompt/file-selection/panel content only -- gate/
+  # slop/secret-scan are unaffected.
+#   # Globs whose matching files are dropped from the AI review (lockfiles, generated output, etc.).
+#   # Applied before path_filters. Empty/default ⇒ every file is reviewed.
+#   exclude_paths:
+#     - "**/*.lock"
+#     - "dist/**"
+#   # Include + `!`-negation globs that positively scope the AI review AFTER exclude_paths.
+#   # Plain entries restrict to matching paths; a leading `!` subtracts matches. Both `*` and `**` cross
+#   # directory slashes. Empty/default ⇒ every non-excluded file is reviewed (byte-identical).
+#   path_filters:
+#     - "src/**"
+#     - "!src/generated/**"
+#   # Public-safe voice brief complementing review.profile (e.g. concise, cite line numbers). null/unset ⇒ byte-identical prompt.
+#   tone: "Be concise and cite line numbers."
+#   # How nitpicky the AI maintainer review is. chill | balanced | assertive. Default: balanced (absent).
+#   # chill = only blocking defects; assertive = also minor nits. Never changes the gate verdict.
+#   profile: balanced
+#   # When true, the reviewer prioritizes a security-defect category with elevated scrutiny, on top of
+#   # whatever `profile` volume is set. Bool or null. Default: null/false (byte-identical prompt).
+#   security_focus: false
+#   # A repo-level natural-language brief handed to the AI reviewer on EVERY review (vs the per-path
+#   # path_instructions below) -- the maintainer's conventions/voice. Bounded + public-safe at parse time.
+#   # String or null. Default: null (byte-identical prompt). Also feeds AI-generated E2E test coverage
+#   # (features.e2eTests, #4190/#4189) when that feature is enabled -- the same conventions brief steers
+#   # both the AI reviewer and the AI test generator, so you only write it once.
+#   instructions: "Prefer small, focused PRs. Flag any missing test for a bug fix."
+#   # Per-path natural-language guidance handed to the AI reviewer when a changed file matches the glob.
+#   # Empty/default ⇒ byte-identical prompt. Also feeds AI-generated E2E test coverage the same way as
+#   # `instructions` above, for path-scoped rules ("always test the payment-failure retry path").
+#   path_instructions:
+#     - path: "src/db/**"
+#       instructions: "Flag any migration missing a matching down-path note."
+#   # How strictly a linked issue must actually be SATISFIED by the PR (distinct from linkedIssuePolicy,
+#   # which only checks a link EXISTS). off = not evaluated; advisory = surface a finding; block = can
+#   # become a hard blocker (confirmed-contributor-gated). Fallback alias for gate.linkedIssueSatisfaction
+#   # above (#4149) -- used only when that field is unset; setting either spelling has the same real effect.
+#   # off | advisory | block. Default: off (byte-identical when unset).
+#   linkedIssueSatisfaction: off
+#   # Maintainer-declared DETERMINISTIC content assertions (title/description must contain a phrase, a
+#   # label must be present), optionally gated to a path glob. A failed check is advisory by default;
+#   # `enforce: true` makes it a hard gate blocker. Empty/default ⇒ no finding (no AI judgment involved).
+#   pre_merge_checks:
+#     - name: "require a linked issue reference in the description"
+#       description_contains: "Fixes #"
+#       enforce: false
+#   # Per-repo REES enrichment-analyzer toggles (analyzer name -> on/off). Unknown keys warn + drop at
+#   # parse. Empty/default ⇒ the operator's default analyzer set runs unchanged.
+#   enrichment:
+#     deep-nesting: true
+#     error-swallow: false
+#   # Per-repo self-host reviewer model/effort overrides (claude-code / codex). Self-host only; a hosted
+#   # (Workers-AI) repo ignores this entirely. All-null/default ⇒ the operator's global env vars apply.
+#   ai_model:
+#     claude_model: null   # Overrides CLAUDE_AI_MODEL for this repo. String or null.
+#     claude_effort: null  # Overrides CLAUDE_AI_EFFORT for this repo. String or null. Default (env unset): medium.
+#     codex_model: null    # Overrides CODEX_AI_MODEL for this repo. String or null.
+#     codex_effort: null   # Overrides CODEX_AI_EFFORT for this repo. String or null. Default (env unset): medium.
+#     ollama_model: null   # Overrides OLLAMA_AI_MODEL for this repo's ollama reviewer. String or null. (#3902)
+#     openai_model: null   # Overrides OPENAI_AI_MODEL for this repo's openai reviewer. String or null. (#3902)
+#     openai_compatible_model: null  # Overrides OPENAI_COMPATIBLE_AI_MODEL for this repo. String or null. (#3902)
+#     anthropic_model: null  # Overrides ANTHROPIC_AI_MODEL for this repo's BYOK Messages API reviewer. String or null. (#3902)
+#   # Per-repo before/after screenshot-capture config (#3609 preview / #3610 routes). Only takes effect when
+#   # the operator has ALSO enabled LOOPOVER_REVIEW_SCREENSHOTS + this repo's cutover allowlist -- this
+#   # config narrows/redirects that feature, it never turns it on by itself. All-null/empty/default ⇒
+#   # byte-identical to today (GitHub-native preview discovery, automatic file-to-route inference).
+#   visual:
+#     # The repo's "before" production URL -- e.g. "https://metagraph.sh" for a repo whose live site differs
+#     # from the operator's own PUBLIC_SITE_ORIGIN env var (a single GLOBAL value with no per-repo awareness,
+#     # correct for at most one repo on a multi-repo self-host instance). ALWAYS wins over PUBLIC_SITE_ORIGIN
+#     # when set, mirroring preview.url_template's precedence over GitHub-native discovery below. Must resolve
+#     # to a valid HTTPS URL targeting a public host (same SSRF guard as preview.url_template). String or null.
+#     # Default: null (falls back to PUBLIC_SITE_ORIGIN).
+#     production_url: "https://example.com"
+#     preview:
+#       # The repo's "after" preview URL, with {number}/{head_sha}/{head_sha_short} placeholders substituted
+#       # at capture time. ALWAYS wins over GitHub-native preview discovery (Deployments API / commit checks /
+#       # cloudflare-bot PR comment) when set -- the only option for a provider (e.g. Cloudflare Workers
+#       # Builds' non-production branch builds) that never surfaces a GitHub-visible deployment at all. Must
+#       # resolve to a valid HTTPS URL targeting a public host. String or null. Default: null (discovery unchanged).
+#       url_template: "https://pr-{number}.myapp.workers.dev"
+#     routes:
+#       # An explicit, always-screenshotted route list. When non-empty, REPLACES automatic file-to-route
+#       # inference entirely -- for a repo whose routing convention isn't loopover-ui's TanStack file-based
+#       # one. Empty/default ⇒ automatic inference (falling back to "/" when nothing matches).
+#       paths:
+#         - "/pricing"
+#         - "/docs"
+#       # Overrides the built-in cap (2) on how many routes get screenshotted per PR, whether they come from
+#       # `paths` above or automatic inference. Positive integer or null. Default: null (built-in default).
+#       max_routes: 3
+#     # Which `prefers-color-scheme` variants to capture (#3678). List of "light"/"dark", each rendered as a
+#     # separate before/after row. Empty/default ⇒ a single light-theme capture, byte-identical to today.
+#     themes:
+#       - light
+#       - dark
+#     # The localStorage key to ALSO force `theme` into (plus a reload) before rendering (#4109) -- a
+#     # fallback for a target whose theming reads an explicit stored preference instead of consulting
+#     # `prefers-color-scheme` (VERIFIED: emulateMediaFeatures alone has zero effect on that class of app,
+#     # since it only changes what CSS media queries / matchMedia report -- it never touches localStorage).
+#     # Only takes effect when `themes` above is also configured. String or null. Default: null (no
+#     # localStorage write, no reload -- byte-identical to today).
+#     theme_storage_key: "theme"
+#     # Also capture a short scroll-through GIF per route (desktop only) — evidence for scroll-linked behavior
+#     # (parallax, reveal-on-scroll, a sticky header) that a static screenshot can't show (#3612). Rendered as
+#     # a separate "Scroll preview" section alongside the static before/after table, never replacing it.
+#     # SELF-HOST ONLY (no effect on the hosted service) and the heaviest capture mode here — up to 6 extra
+#     # renders per side, ~4s wall-clock per side measured in practice. Bool. Default: false (no scroll capture).
+#     gif: false
+#     # Config-as-code enable/disable for this repo, layered ON TOP OF (never a replacement for) the
+#     # LOOPOVER_REVIEW_SCREENSHOTS + per-repo cutover-allowlist env-var gate above (#4083). Bool or null.
+#     # Default: null (unset) ⇒ defers entirely to that env-var gate's own decision -- byte-identical to today.
+#     # Explicit `false` (set once at the global-default `.loopover.yml`, or overridden per-repo here) forces
+#     # capture off for this repo even when the env-var gate would otherwise allow it. Explicit `true` opts this
+#     # repo back in at a layer where a broader default disabled it -- it does NOT bypass the env-var gate
+#     # itself, so the env vars remain the outer infra-availability switch.
+#     enabled: true
+#     # When true, and ONLY when the discovery above finds no preview at all for a PR, dispatch
+#     # .github/workflows/visual-capture-fallback.yml -- a fork-safe GitHub Actions job (contents: read, no
+#     # secrets) that builds, serves, and screenshots the PR's own code, and use its captured PNGs as the
+#     # "after" shot instead. Requires that workflow file to be present in this repo (copy it from
+#     # JSONbored/loopover unmodified -- see the workflow's own header for setup). Bool. Default: false (no
+#     # dispatch, byte-identical to today). Not needed for loopover-ui / metagraphed, which already have
+#     # their own preview-deploy pipeline. (#4112, part of the #3607 visual-capture convergence epic)
+#     actions_fallback: false
+#   # Maintainer overrides for the public review-panel CONTENT (not what loopover measures). The
+#   # Gittensor attribution + register link is always appended to the footer regardless; maintainer text
+#   # failing the public-safe filter is dropped, never published.
+#   footer:
+#     text: "Reviewed by the Acme maintainer bot."  # Custom lead line. String or null. Default: null.
+#   note: "Run the test suite before requesting review."  # Short intro line shown above the panel. String or null.
+#   # Per-row show/hide toggles for the panel. Keys: linkedIssue | relatedWork | reviewLoad |
+#   # validationEvidence | openPrQueue | contributorContext | gateResult | improvementSignal. Default: all
+#   # shown (true). improvementSignal (#4744) only ever renders content when the `improvementSignal` converged
+#   # feature (see `features:` below) is ALSO active for this repo -- this toggle just hides that row/section
+#   # like any other; it never turns the feature itself on.
+#   fields:
+#     relatedWork: false
+#     openPrQueue: false
+
+# ----------------------------------------------------------------------------
+# 4. GENERIC SETTINGS (`settings:`) — dashboard-equivalent overrides
+# ----------------------------------------------------------------------------
+# Everything a maintainer can toggle in the dashboard can be set here as code.
+# All values shown are the safe defaults; delete any line to inherit it.
 settings:
   # Who receives the public PR comment.
   # off | detected_contributors_only | all_prs. Default: detected_contributors_only.
@@ -988,202 +1132,6 @@ settings:
   #   chatQa: false        # @loopover chat <question> grounded LLM Q&A. Ollama-first (never the frontier env.AI unless chatQaFrontierFallback below is also true); needs env.AI_ADVISORY set. Co-requisite: commandRateLimitPolicy: hold (defaults off). Default: false.
   #   chatQaFrontierFallback: false  # Opt-in only: falls back to the frontier env.AI chain if env.AI_ADVISORY is unconfigured, instead of declining. Meaningless unless chatQa is also true. Default: false.
   #   intentRouting: false # Closed-set intent classifier for unrecognized @loopover mentions -> existing Q&A commands only. Ollama-ONLY, same as chatQa (never uses chatQaFrontierFallback). Co-requisite: commandRateLimitPolicy: hold. Default: false.
-
-# Maintainer AI review tuning (`.loopover.yml` top-level `review:` block). These knobs shape the advisory AI
-# review prompt and file selection only — gate/slop/secret-scan are unaffected.
-# review:
-#   # Globs whose matching files are dropped from the AI review (lockfiles, generated output, etc.).
-#   # Applied before path_filters. Empty/default ⇒ every file is reviewed.
-#   exclude_paths:
-#     - "**/*.lock"
-#     - "dist/**"
-#   # Include + `!`-negation globs that positively scope the AI review AFTER exclude_paths.
-#   # Plain entries restrict to matching paths; a leading `!` subtracts matches. Both `*` and `**` cross
-#   # directory slashes. Empty/default ⇒ every non-excluded file is reviewed (byte-identical).
-#   path_filters:
-#     - "src/**"
-#     - "!src/generated/**"
-#   # Public-safe voice brief complementing review.profile (e.g. concise, cite line numbers). null/unset ⇒ byte-identical prompt.
-#   tone: "Be concise and cite line numbers."
-#   # How nitpicky the AI maintainer review is. chill | balanced | assertive. Default: balanced (absent).
-#   # chill = only blocking defects; assertive = also minor nits. Never changes the gate verdict.
-#   profile: balanced
-#   # When true, the reviewer prioritizes a security-defect category with elevated scrutiny, on top of
-#   # whatever `profile` volume is set. Bool or null. Default: null/false (byte-identical prompt).
-#   security_focus: false
-#   # A repo-level natural-language brief handed to the AI reviewer on EVERY review (vs the per-path
-#   # path_instructions below) -- the maintainer's conventions/voice. Bounded + public-safe at parse time.
-#   # String or null. Default: null (byte-identical prompt). Also feeds AI-generated E2E test coverage
-#   # (features.e2eTests, #4190/#4189) when that feature is enabled -- the same conventions brief steers
-#   # both the AI reviewer and the AI test generator, so you only write it once.
-#   instructions: "Prefer small, focused PRs. Flag any missing test for a bug fix."
-#   # Per-path natural-language guidance handed to the AI reviewer when a changed file matches the glob.
-#   # Empty/default ⇒ byte-identical prompt. Also feeds AI-generated E2E test coverage the same way as
-#   # `instructions` above, for path-scoped rules ("always test the payment-failure retry path").
-#   path_instructions:
-#     - path: "src/db/**"
-#       instructions: "Flag any migration missing a matching down-path note."
-#   # When true, the AI reviewer ALSO leaves quiet, non-blocking inline PR comments on specific changed
-#   # lines, in addition to the decision summary. Bool or null. Default: null/false (no inline comments).
-#   # Operator-gated too (LOOPOVER_REVIEW_INLINE_COMMENTS + allowlist).
-#   inline_comments: false
-#   # When true, an inline finding whose fix is precise enough to anchor to one line is ALSO rendered as
-#   # a one-click GitHub suggestion block. Only takes effect when inline_comments is already on. Bool or
-#   # null. Default: null/false.
-#   suggestions: false
-#   # When true, the unified review comment (only rendered when the unifiedComment feature is on) gains a
-#   # deterministic "Changed files" summary: one row per file category, with counts and +/- totals. Bool
-#   # or null. Default: null/false.
-#   changed_files_summary: false
-#   # When true, the unified review comment (only rendered when the unifiedComment feature is on) gains a
-#   # compact "review effort: N/5 (~M min)" chip -- a deterministic, no-AI complexity/time estimate from the
-#   # changed files' added-line volume and file-type mix. Bool or null. Default: null/false.
-#   effort_score: false
-#   # When true (AND the operator's LOOPOVER_REVIEW_IMPACT_MAP env flag is also on), a deterministic
-#   # impact map -- which other repo files plausibly need re-checking, from the RAG index + changed
-#   # symbols -- is computed, rendered as a compact unified-comment section, and fed to the AI reviewer
-#   # as additive reference context. Bool or null. Default: null/false (#2184, part of #1971).
-#   impact_map: false
-#   # When true, the AI reviewer's prompt gains an additive "repo quality-culture profile" reference block --
-#   # typical merged-PR size + common accepted labels, derived from this repo's OWN recent merge history
-#   # (recent_merged_pull_requests). Reference-only grounding, never a gate/scoring input; requires the operator
-#   # flag LOOPOVER_REVIEW_CULTURE_PROFILE. Bool or null. Default: null/false. (#2995)
-#   culture_profile: false
-#   # Per-repo FORCE-OFF for the self-improvement/auto-tune cron pass (#4104) -- false excludes this repo from
-#   # tuning even though it's otherwise agent-configured and the operator flag is on. FORCE-OFF-ONLY, no true
-#   # override -- selftune's own scoping is the acting-autonomy consent boundary, not a per-repo allowlist. Bool
-#   # or null. Default: null/true -- no change to today's agent-configured-repos-only behavior.
-#   selftune: false
-#   # When true (AND the operator's LOOPOVER_REVIEW_MEMORY env flag is also on), an advisory (non-blocking)
-#   # AI finding is matched against this repo's stored review_suppression signals (a maintainer's own past
-#   # false-positive dismissals) before it is surfaced, and demoted/dropped on a match. ADVISORY-ONLY: never
-#   # applied to gate blockers -- it can never change the merge/close disposition. Bool or null.
-#   # Default: null/false. (#2179, part of #1964)
-#   memory: false
-#   # When true, an inline finding is ALSO tagged with a category (security/correctness/performance/
-#   # maintainability/tests/style) -- the AI reviewer self-categorizes, with a deterministic path/keyword
-#   # fallback for whatever it omits. Only takes effect when inline_comments is already on. Bool or null.
-#   # Default: null/false.
-#   finding_categories: false
-#   # How strictly a linked issue must actually be SATISFIED by the PR (distinct from linkedIssuePolicy,
-#   # which only checks a link EXISTS). off = not evaluated; advisory = surface a finding; block = can
-#   # become a hard blocker (confirmed-contributor-gated). Fallback alias for gate.linkedIssueSatisfaction
-#   # above (#4149) -- used only when that field is unset; setting either spelling has the same real effect.
-#   # off | advisory | block. Default: off (byte-identical when unset).
-#   linkedIssueSatisfaction: off
-#   # Maintainer-declared DETERMINISTIC content assertions (title/description must contain a phrase, a
-#   # label must be present), optionally gated to a path glob. A failed check is advisory by default;
-#   # `enforce: true` makes it a hard gate blocker. Empty/default ⇒ no finding (no AI judgment involved).
-#   pre_merge_checks:
-#     - name: "require a linked issue reference in the description"
-#       description_contains: "Fixes #"
-#       enforce: false
-#   # Per-repo REES enrichment-analyzer toggles (analyzer name -> on/off). Unknown keys warn + drop at
-#   # parse. Empty/default ⇒ the operator's default analyzer set runs unchanged.
-#   enrichment:
-#     deep-nesting: true
-#     error-swallow: false
-#   # Per-repo self-host reviewer model/effort overrides (claude-code / codex). Self-host only; a hosted
-#   # (Workers-AI) repo ignores this entirely. All-null/default ⇒ the operator's global env vars apply.
-#   ai_model:
-#     claude_model: null   # Overrides CLAUDE_AI_MODEL for this repo. String or null.
-#     claude_effort: null  # Overrides CLAUDE_AI_EFFORT for this repo. String or null. Default (env unset): medium.
-#     codex_model: null    # Overrides CODEX_AI_MODEL for this repo. String or null.
-#     codex_effort: null   # Overrides CODEX_AI_EFFORT for this repo. String or null. Default (env unset): medium.
-#     ollama_model: null   # Overrides OLLAMA_AI_MODEL for this repo's ollama reviewer. String or null. (#3902)
-#     openai_model: null   # Overrides OPENAI_AI_MODEL for this repo's openai reviewer. String or null. (#3902)
-#     openai_compatible_model: null  # Overrides OPENAI_COMPATIBLE_AI_MODEL for this repo. String or null. (#3902)
-#     anthropic_model: null  # Overrides ANTHROPIC_AI_MODEL for this repo's BYOK Messages API reviewer. String or null. (#3902)
-#   # Per-repo before/after screenshot-capture config (#3609 preview / #3610 routes). Only takes effect when
-#   # the operator has ALSO enabled LOOPOVER_REVIEW_SCREENSHOTS + this repo's cutover allowlist -- this
-#   # config narrows/redirects that feature, it never turns it on by itself. All-null/empty/default ⇒
-#   # byte-identical to today (GitHub-native preview discovery, automatic file-to-route inference).
-#   visual:
-#     # The repo's "before" production URL -- e.g. "https://metagraph.sh" for a repo whose live site differs
-#     # from the operator's own PUBLIC_SITE_ORIGIN env var (a single GLOBAL value with no per-repo awareness,
-#     # correct for at most one repo on a multi-repo self-host instance). ALWAYS wins over PUBLIC_SITE_ORIGIN
-#     # when set, mirroring preview.url_template's precedence over GitHub-native discovery below. Must resolve
-#     # to a valid HTTPS URL targeting a public host (same SSRF guard as preview.url_template). String or null.
-#     # Default: null (falls back to PUBLIC_SITE_ORIGIN).
-#     production_url: "https://example.com"
-#     preview:
-#       # The repo's "after" preview URL, with {number}/{head_sha}/{head_sha_short} placeholders substituted
-#       # at capture time. ALWAYS wins over GitHub-native preview discovery (Deployments API / commit checks /
-#       # cloudflare-bot PR comment) when set -- the only option for a provider (e.g. Cloudflare Workers
-#       # Builds' non-production branch builds) that never surfaces a GitHub-visible deployment at all. Must
-#       # resolve to a valid HTTPS URL targeting a public host. String or null. Default: null (discovery unchanged).
-#       url_template: "https://pr-{number}.myapp.workers.dev"
-#     routes:
-#       # An explicit, always-screenshotted route list. When non-empty, REPLACES automatic file-to-route
-#       # inference entirely -- for a repo whose routing convention isn't loopover-ui's TanStack file-based
-#       # one. Empty/default ⇒ automatic inference (falling back to "/" when nothing matches).
-#       paths:
-#         - "/pricing"
-#         - "/docs"
-#       # Overrides the built-in cap (2) on how many routes get screenshotted per PR, whether they come from
-#       # `paths` above or automatic inference. Positive integer or null. Default: null (built-in default).
-#       max_routes: 3
-#     # Which `prefers-color-scheme` variants to capture (#3678). List of "light"/"dark", each rendered as a
-#     # separate before/after row. Empty/default ⇒ a single light-theme capture, byte-identical to today.
-#     themes:
-#       - light
-#       - dark
-#     # The localStorage key to ALSO force `theme` into (plus a reload) before rendering (#4109) -- a
-#     # fallback for a target whose theming reads an explicit stored preference instead of consulting
-#     # `prefers-color-scheme` (VERIFIED: emulateMediaFeatures alone has zero effect on that class of app,
-#     # since it only changes what CSS media queries / matchMedia report -- it never touches localStorage).
-#     # Only takes effect when `themes` above is also configured. String or null. Default: null (no
-#     # localStorage write, no reload -- byte-identical to today).
-#     theme_storage_key: "theme"
-#     # Also capture a short scroll-through GIF per route (desktop only) — evidence for scroll-linked behavior
-#     # (parallax, reveal-on-scroll, a sticky header) that a static screenshot can't show (#3612). Rendered as
-#     # a separate "Scroll preview" section alongside the static before/after table, never replacing it.
-#     # SELF-HOST ONLY (no effect on the hosted service) and the heaviest capture mode here — up to 6 extra
-#     # renders per side, ~4s wall-clock per side measured in practice. Bool. Default: false (no scroll capture).
-#     gif: false
-#     # Config-as-code enable/disable for this repo, layered ON TOP OF (never a replacement for) the
-#     # LOOPOVER_REVIEW_SCREENSHOTS + per-repo cutover-allowlist env-var gate above (#4083). Bool or null.
-#     # Default: null (unset) ⇒ defers entirely to that env-var gate's own decision -- byte-identical to today.
-#     # Explicit `false` (set once at the global-default `.loopover.yml`, or overridden per-repo here) forces
-#     # capture off for this repo even when the env-var gate would otherwise allow it. Explicit `true` opts this
-#     # repo back in at a layer where a broader default disabled it -- it does NOT bypass the env-var gate
-#     # itself, so the env vars remain the outer infra-availability switch.
-#     enabled: true
-#     # When true, and ONLY when the discovery above finds no preview at all for a PR, dispatch
-#     # .github/workflows/visual-capture-fallback.yml -- a fork-safe GitHub Actions job (contents: read, no
-#     # secrets) that builds, serves, and screenshots the PR's own code, and use its captured PNGs as the
-#     # "after" shot instead. Requires that workflow file to be present in this repo (copy it from
-#     # JSONbored/loopover unmodified -- see the workflow's own header for setup). Bool. Default: false (no
-#     # dispatch, byte-identical to today). Not needed for loopover-ui / metagraphed, which already have
-#     # their own preview-deploy pipeline. (#4112, part of the #3607 visual-capture convergence epic)
-#     actions_fallback: false
-#   # Maintainer overrides for the public review-panel CONTENT (not what loopover measures). The
-#   # Gittensor attribution + register link is always appended to the footer regardless; maintainer text
-#   # failing the public-safe filter is dropped, never published.
-#   footer:
-#     text: "Reviewed by the Acme maintainer bot."  # Custom lead line. String or null. Default: null.
-#   note: "Run the test suite before requesting review."  # Short intro line shown above the panel. String or null.
-#   # Per-row show/hide toggles for the panel. Keys: linkedIssue | relatedWork | reviewLoad |
-#   # validationEvidence | openPrQueue | contributorContext | gateResult | improvementSignal. Default: all
-#   # shown (true). improvementSignal (#4744) only ever renders content when the `improvementSignal` converged
-#   # feature (see `features:` below) is ALSO active for this repo -- this toggle just hides that row/section
-#   # like any other; it never turns the feature itself on.
-#   fields:
-#     relatedWork: false
-#     openPrQueue: false
-#   # See the active `review.auto_review` block above for the full eligibility reference (defaults, types, examples).
-#   # The commented snapshot below mirrors a typical self-host setup:
-#   auto_review:
-#     skip_drafts: true
-#     ignore_authors:
-#       - "*[bot]"
-#     ignore_title_keywords:
-#       - WIP
-#       - DRAFT
-#     base_branches:
-#       - main
-#       - release/**
-#     auto_pause_after_reviewed_commits: 3
 
 # Per-repo activation overrides for the converged review features that ship behind a deployment-wide
 # LOOPOVER_REVIEW_* env kill-switch (rag/reputation/unifiedComment/safety/grounding/e2eTests/screenshots/
