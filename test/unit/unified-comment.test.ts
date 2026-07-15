@@ -153,7 +153,11 @@ describe("renderUnifiedReviewComment", () => {
     // second `> ` on top of asAlert's own per-line prefix, giving it a visually distinct bordered sub-block.
     expect(md).toContain("> > **✅ Suggested Action - Approve/Merge**");
     expect(md).toContain("**Review summary**");
-    expect(md).toContain("| **Code review** | ✅ No blockers | 2 reviewers, synthesized |");
+    // #6067: the old always-rendered table is split into an always-visible "Decision drivers" bullet list
+    // (Code review + any gates:true row) and a collapsed "Context & advisory signals" fold (everything else).
+    expect(md).toContain("**Decision drivers**");
+    expect(md).toContain("- ✅ Code review — No blockers (2 reviewers, synthesized)");
+    expect(md).toContain("<details><summary><b>Context & advisory signals</b> — never blocks the verdict</summary>");
     expect(md).toContain("| Linked issue | ✅ Linked | #1372 |");
     expect(md).toContain("<details><summary><b>Nits</b> — 1 non-blocking</summary>");
     expect(md).toContain("- [ ] Document the new property.");
@@ -167,7 +171,7 @@ describe("renderUnifiedReviewComment", () => {
   it("does not describe a single reviewer as synthesized", () => {
     const md = renderUnifiedReviewComment({ ...base, reviewerCount: 1, decision: "manual", recommendations: ["manual_review"] }, ctx);
     expect(md).toContain("`1 AI reviewer`");
-    expect(md).toContain("| **Code review** | ✅ No blockers | 1 reviewer |");
+    expect(md).toContain("- ✅ Code review — No blockers (1 reviewer)");
     expect(md).not.toContain("1 reviewers, synthesized");
   });
 
@@ -228,7 +232,7 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("Suggested Action - Reject/Close");
     expect(md).toContain("Why this is blocked");
     expect(md).toContain("Introduces a hardcoded secret.");
-    expect(md).toContain("| **Code review** | ❌ 1 blocker |");
+    expect(md).toContain("- ❌ Code review — 1 blocker (2 reviewers, synthesized)");
     // #6066: the advisory-only readiness score is hidden on a non-"ready" verdict — "readiness 93/100" next
     // to "fixes required" reads as contradictory, since the score never feeds the gate either way.
     expect(md).not.toContain("readiness 93/100");
@@ -529,6 +533,23 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("| Bare row | ⚠️ |  |");
   });
 
+  it("#6067: a gates:true row joins Code review in the always-visible Decision drivers list, not the advisory fold", () => {
+    const md = renderUnifiedReviewComment(
+      { ...base, decision: "close", blockers: ["x"] },
+      { signals: [{ label: "Gate result", state: "fail", result: "Blocking", evidence: "linked issue required", gates: true }] },
+    );
+    expect(md).toContain("**Decision drivers**");
+    expect(md).toContain("- ❌ Code review — 1 blocker (2 reviewers, synthesized)");
+    expect(md).toContain("- ❌ Gate result — Blocking (linked issue required)");
+    expect(md).not.toContain("Context & advisory signals"); // nothing advisory was supplied ⇒ the fold is omitted
+  });
+
+  it("#6067: a gates:true row with neither a result nor evidence still renders a bare Decision drivers bullet", () => {
+    const md = renderUnifiedReviewComment({ ...base, decision: "merge" }, { signals: [{ label: "Gate result", state: "ok", gates: true }] });
+    expect(md).toContain("- ✅ Gate result — ");
+    expect(md).not.toContain("Gate result — (");
+  });
+
   it("uses the 'Concerns raised' heading (not 'Why this is blocked') for blockers on a non-blocked status", () => {
     // a lone request_changes blocker → held, but the concern is still surfaced under the softer heading
     const md = renderUnifiedReviewComment({ ...base, recommendations: ["request_changes"], blockers: ["Edge case unhandled."], consensusBlocker: false }, {});
@@ -569,6 +590,53 @@ describe("renderUnifiedReviewComment", () => {
     expect(md).toContain("<details><summary><b>Nits</b> — 1 non-blocking</summary>");
     expect(md).not.toContain("Safe summary </details>");
     expect(md).not.toContain("Body <!-- comment -->");
+  });
+
+  describe("blockerFixContext (#6068)", () => {
+    it("renders one 'Copy AI fix context' collapsible per entry, labeled with its path:line", () => {
+      const md = renderUnifiedReviewComment({
+        ...base,
+        decision: "close",
+        blockers: ["Null check missing."],
+        blockerFixContext: [
+          { path: "src/foo.ts", line: 10, body: "**Fix handoff — Blocker at `src/foo.ts:10`**\nNull check missing." },
+          { path: "src/bar.ts", line: 20, body: "**Fix handoff — Blocker at `src/bar.ts:20`**\nAnother defect." },
+        ],
+      });
+      expect(md).toContain("<details><summary><b>🔧 Copy AI fix context</b> — src/foo.ts:10</summary>");
+      expect(md).toContain("<details><summary><b>🔧 Copy AI fix context</b> — src/bar.ts:20</summary>");
+      expect(md.match(/🔧 Copy AI fix context/g)?.length).toBe(2);
+    });
+
+    it("labels the collapsible with just the path when line is absent or the 0 no-line sentinel", () => {
+      const withoutLine = renderUnifiedReviewComment({ ...base, decision: "close", blockerFixContext: [{ path: "src/foo.ts", body: "x" }] });
+      expect(withoutLine).toContain("— src/foo.ts</summary>");
+      expect(withoutLine).not.toContain("src/foo.ts:0");
+      const zeroLine = renderUnifiedReviewComment({ ...base, decision: "close", blockerFixContext: [{ path: "src/foo.ts", line: 0, body: "x" }] });
+      expect(zeroLine).toContain("— src/foo.ts</summary>");
+      expect(zeroLine).not.toContain("src/foo.ts:0");
+    });
+
+    it("renders independently of the plain-text blockers list — present even with zero string blockers", () => {
+      const md = renderUnifiedReviewComment({ ...base, decision: "merge", blockerFixContext: [{ path: "src/foo.ts", line: 1, body: "x" }] });
+      expect(md).not.toContain("Why this is blocked");
+      expect(md).toContain("🔧 Copy AI fix context");
+    });
+
+    it("omits every 'Copy AI fix context' collapsible when absent (default, byte-identical)", () => {
+      const md = renderUnifiedReviewComment({ ...base, decision: "close", blockers: ["x"] });
+      expect(md).not.toContain("🔧 Copy AI fix context");
+    });
+
+    it("angle-escapes blockerFixContext body content (public-safe)", () => {
+      const md = renderUnifiedReviewComment({
+        ...base,
+        decision: "close",
+        blockerFixContext: [{ path: "src/foo.ts", line: 1, body: "Suggested fix </details><!-- hidden -->" }],
+      });
+      expect(md).toContain("Suggested fix &lt;/details&gt;&lt;!-- hidden --&gt;");
+      expect(md).not.toContain("Suggested fix </details>");
+    });
   });
 });
 
@@ -832,12 +900,12 @@ describe("review.comment_verbosity (#2047)", () => {
   };
   const extraCtx: UnifiedCommentContext = { extraCollapsibles: [{ title: "Changed files", body: "src/a.ts +5" }] };
 
-  it("quiet drops the Nits collapsible and every extra collapsible, but keeps blockers/signal table", () => {
+  it("quiet drops the Nits collapsible and every extra collapsible, but keeps blockers/decision drivers", () => {
     const md = renderUnifiedReviewComment(input, { ...extraCtx, commentVerbosity: "quiet" });
     expect(md).not.toContain("<summary><b>Nits</b>");
     expect(md).not.toContain("Changed files");
     expect(md).toContain("a real blocker");
-    expect(md).toContain("**Code review**"); // signal table row always present
+    expect(md).toContain("**Decision drivers**"); // #6067: decision drivers always present, like the table before it
   });
 
   it("quiet also drops the linked-issue satisfaction section (#2174)", () => {

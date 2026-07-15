@@ -71,10 +71,19 @@ describe("panelRowsToSignalRows", () => {
   it("derives ok/warn/fail from the leading icon and strips it from the result text", () => {
     const rows = panelRowsToSignalRows(panelRows);
     const linked = rows.find((row) => row.label === "Linked issue");
-    expect(linked).toEqual({ label: "Linked issue", state: "ok", result: "Linked", evidence: "#42" });
+    // gates: false — only the "Gate result" row is ever decision-authoritative (#6067).
+    expect(linked).toEqual({ label: "Linked issue", state: "ok", result: "Linked", evidence: "#42", gates: false });
     const reviewLoad = rows.find((row) => row.label === "Change scope");
     expect(reviewLoad?.state).toBe("warn");
     expect(reviewLoad?.result).toBe("14/20");
+  });
+
+  it("marks ONLY the Gate result row as gates: true (#6067) — every other row is advisory", () => {
+    const rows = panelRowsToSignalRows(panelRows);
+    const gateResult = rows.find((row) => row.label === "Gate result");
+    expect(gateResult?.gates).toBe(true);
+    const everythingElse = rows.filter((row) => row.label !== "Gate result");
+    expect(everythingElse.every((row) => row.gates === false)).toBe(true);
   });
 
   it("maps a ❌ result cell to fail", () => {
@@ -532,6 +541,89 @@ describe("buildUnifiedCommentBody", () => {
     expect(body).toContain("auto-merged"); // merged → ready wording
     expect(body).toContain("- [ ] Re-run LoopOver review"); // reRunLabel
     expect(body).toContain("<details><summary><b>Signal definitions</b></summary>"); // extraCollapsibles
+  });
+
+  describe("fixHandoffBlocks severity split (#6068)", () => {
+    const blockerBlock = {
+      path: "src/foo.ts",
+      line: 10,
+      severity: "blocker" as const,
+      instruction: "Null check missing.",
+      body: "<!-- loopover:fix-handoff -->\n**Fix handoff — Blocker at `src/foo.ts:10`**\nNull check missing.",
+      boundary: "Local execution only.",
+    };
+    const nitBlock = {
+      path: "src/bar.ts",
+      line: 20,
+      severity: "nit" as const,
+      instruction: "Consider renaming.",
+      body: "<!-- loopover:fix-handoff -->\n**Fix handoff — Nit at `src/bar.ts:20`**\nConsider renaming.",
+      boundary: "Local execution only.",
+    };
+
+    it("renders a blocker-severity block as its own 'Copy AI fix context' collapsible, and a nit-severity block inside 'Fix handoff'", () => {
+      const body = buildUnifiedCommentBody({
+        gate: gate(),
+        panelRows,
+        readinessTotal: 70,
+        changedFiles: 2,
+        footerMarkdown: footer,
+        fixHandoffBlocks: [blockerBlock, nitBlock],
+      });
+      expect(body).toContain("<details><summary><b>🔧 Copy AI fix context</b> — src/foo.ts:10</summary>");
+      expect(body).toContain("Null check missing.");
+      expect(body).toContain("<details><summary><b>Fix handoff</b></summary>");
+      expect(body).toContain("Consider renaming.");
+      // The blocker-severity instruction must NOT also leak into the combined "Fix handoff" collapsible body.
+      const fixHandoffIndex = body.indexOf("<details><summary><b>Fix handoff</b></summary>");
+      const fixHandoffEnd = body.indexOf("</details>", fixHandoffIndex);
+      expect(body.slice(fixHandoffIndex, fixHandoffEnd)).not.toContain("Null check missing.");
+    });
+
+    it("omits the 'Fix handoff' collapsible entirely when every block is blocker-severity", () => {
+      const body = buildUnifiedCommentBody({
+        gate: gate(),
+        panelRows,
+        readinessTotal: 70,
+        changedFiles: 2,
+        footerMarkdown: footer,
+        fixHandoffBlocks: [blockerBlock],
+      });
+      expect(body).toContain("🔧 Copy AI fix context");
+      expect(body).not.toContain("<details><summary><b>Fix handoff</b></summary>");
+    });
+
+    it("omits the per-blocker 'Copy AI fix context' collapsible entirely when every block is nit-severity", () => {
+      const body = buildUnifiedCommentBody({
+        gate: gate(),
+        panelRows,
+        readinessTotal: 70,
+        changedFiles: 2,
+        footerMarkdown: footer,
+        fixHandoffBlocks: [nitBlock],
+      });
+      expect(body).not.toContain("🔧 Copy AI fix context");
+      expect(body).toContain("<details><summary><b>Fix handoff</b></summary>");
+    });
+
+    it("renders neither section when fixHandoffBlocks is absent (default, byte-identical)", () => {
+      const body = buildUnifiedCommentBody({ gate: gate(), panelRows, readinessTotal: 70, changedFiles: 2, footerMarkdown: footer });
+      expect(body).not.toContain("🔧 Copy AI fix context");
+      expect(body).not.toContain("Fix handoff");
+    });
+
+    it("labels the collapsible with just the path when the finding has no commentable line (line: 0 sentinel)", () => {
+      const body = buildUnifiedCommentBody({
+        gate: gate(),
+        panelRows,
+        readinessTotal: 70,
+        changedFiles: 2,
+        footerMarkdown: footer,
+        fixHandoffBlocks: [{ ...blockerBlock, line: 0 }],
+      });
+      expect(body).toContain("<details><summary><b>🔧 Copy AI fix context</b> — src/foo.ts</summary>");
+      expect(body).not.toContain("src/foo.ts:0");
+    });
   });
 
   // #4589: generateTestsLabel is a SEPARATE explicit field on BuildUnifiedCommentBodyArgs (not implicitly

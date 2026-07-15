@@ -128,11 +128,14 @@ function rowResultText(resultCell: string): string {
 }
 
 /** Map the legacy panel signal rows → the unified table's rows (label/state/result/evidence). The
- *  unified renderer adds its own "Code review" row first; these follow it (loopover's gate row included). */
+ *  unified renderer adds its own "Code review" row first; these follow it (loopover's gate row included).
+ *  `gates: true` only for the "Gate result" row (#6067) -- the ONLY row among these that can actually move
+ *  the verdict; every other row's own Evidence/Action text already says it's advisory-only. Drives the split
+ *  between the renderer's always-visible "Decision drivers" list and its collapsed advisory-signals fold. */
 export function panelRowsToSignalRows(rows: PublicPrPanelSignalRow[]): UnifiedSignalRow[] {
   return rows.map((row) => {
     const [label, result, evidence] = row.cells;
-    return { label, state: rowState(result), result: rowResultText(result), evidence };
+    return { label, state: rowState(result), result: rowResultText(result), evidence, gates: row.key === "gateResult" };
   });
 }
 
@@ -746,6 +749,11 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   // "all checks passed" wording rather than being overwritten by the gate's "no blocker found" summary.
   const gateReason = gateVerdictReason(args.gate);
   const verdictReason = verdict !== "merge" ? gateReason : undefined;
+  // #6068: split the fix-handoff blocks by severity -- blocker-severity ones render per-blocker (right after
+  // each blocker, via blockerFixContext below); nit-severity ones stay in the combined "Fix handoff"
+  // collapsible (buildFixHandoffCollapsible, further down) exactly as before. Same source data
+  // (buildFixHandoffBlocks(aiReview.inlineFindings), src/queue/processors.ts), just routed by severity.
+  const blockerFixHandoffBlocks = args.fixHandoffBlocks?.filter((block) => block.severity === "blocker") ?? [];
   const input = buildUnifiedReviewInput({
     changedFiles: args.changedFiles,
     reviews,
@@ -757,6 +765,7 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
     ...(args.maxFindingsCaps !== undefined ? { maxFindingsCaps: args.maxFindingsCaps } : {}),
     ...(args.findingCategories !== undefined ? { inlineFindings: args.findingCategories } : {}),
     ...(args.linkedIssueSatisfaction !== undefined ? { linkedIssueSatisfaction: args.linkedIssueSatisfaction } : {}),
+    ...(blockerFixHandoffBlocks.length > 0 ? { blockerFixContext: blockerFixHandoffBlocks } : {}),
   });
   // The gate already produced 0/1 reviewer notes from a synthesis of the model pair; reflect the caller's
   // actual reviewer count (for the chip + the "N reviewers, synthesized" evidence) without re-deriving it.
@@ -815,11 +824,13 @@ export function buildUnifiedCommentBody(args: UnifiedCommentBridgeArgs): string 
   const withImpactMap =
     impactMapCollapsible !== null ? [...(withFindingCategories ?? []), impactMapCollapsible] : withFindingCategories;
   // review.fixHandoff emission (#1962): when the operator flag AND the manifest opt in, the processor hands us
-  // the pre-rendered fix-handoff blocks here; append the "Fix handoff" collapsible after Impact map (another
-  // structural, no-AI section) and ahead of the visual preview. Flag-OFF (the processor passes undefined) ⇒
-  // extraCollapsibles is unchanged.
-  const fixHandoffCollapsible =
-    args.fixHandoffBlocks && args.fixHandoffBlocks.length > 0 ? buildFixHandoffCollapsible(args.fixHandoffBlocks) : null;
+  // the pre-rendered fix-handoff blocks here. #6068: blocker-severity blocks now render per-blocker instead
+  // (blockerFixHandoffBlocks above, threaded into `input.blockerFixContext`) -- this collapsible carries only
+  // the nit-severity remainder, after Impact map (another structural, no-AI section) and ahead of the visual
+  // preview. Flag-OFF, or every block was blocker-severity, (the processor passes undefined / an empty
+  // remainder) ⇒ extraCollapsibles is unchanged.
+  const nitFixHandoffBlocks = args.fixHandoffBlocks?.filter((block) => block.severity === "nit") ?? [];
+  const fixHandoffCollapsible = nitFixHandoffBlocks.length > 0 ? buildFixHandoffCollapsible(nitFixHandoffBlocks) : null;
   const withFixHandoff =
     fixHandoffCollapsible !== null ? [...(withImpactMap ?? []), fixHandoffCollapsible] : withImpactMap;
   // Advisory-only AI-vision analysis of visual captures (#4111): recovered from the SAME advisory findings
