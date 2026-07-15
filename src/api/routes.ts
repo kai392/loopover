@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { sentry } from "@sentry/hono/cloudflare";
 import { z } from "zod";
 import { parsePositiveInt } from "../utils/json";
 import { analyzePRQueue, type AuthorRole, type ChecksStatus } from "../queue-intelligence";
@@ -914,8 +915,26 @@ function contributorOpenIssueCount(issues: Array<{ repoFullName: string; state: 
   return issues.filter((issue) => issue.repoFullName.toLowerCase() === targetRepo && issue.state === "open").length;
 }
 
+/** True only inside a genuine Cloudflare Workers isolate (the `global_navigator` compat flag, on by default
+ *  for this project's compatibility_date, sets `navigator.userAgent` to this exact literal -- Cloudflare's own
+ *  documented idiom for this check). Self-host's server.ts calls the SAME exported `worker.fetch` this app
+ *  produces (it synthesizes a Worker-shaped `env` by spreading `process.env` specifically so it can reuse this
+ *  handler byte-for-byte) -- gating the Cloudflare-only Sentry middleware on this, rather than on env var
+ *  presence alone, is what keeps it from ever activating inside a self-hoster's own Node process. */
+export function isCloudflareWorkerRuntime(): boolean {
+  return typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
+}
+
 export function createApp() {
   const app = new Hono<AppBindings>();
+  // Registered FIRST/outermost (Sentry's own guidance) so it wraps every other middleware and route below,
+  // including a thrown exception from the CORS/rate-limit middleware right after this. No-ops completely
+  // outside a real Workers isolate (see isCloudflareWorkerRuntime) and when WORKER_SENTRY_DSN is unset -- this
+  // is the Worker-side counterpart to self-host's own initSentry()/installStructuredLogForwarding(), which
+  // this Worker has never had any equivalent of despite being the actual central Orb broker server.
+  if (isCloudflareWorkerRuntime()) {
+    app.use(sentry(app, (env) => ({ dsn: env.WORKER_SENTRY_DSN, environment: env.WORKER_SENTRY_ENVIRONMENT ?? "production" })));
+  }
   app.use("*", async (c, next) => {
     const allowedOrigin = allowedCorsOrigin(c.env, c.req.header("origin"));
     if (allowedOrigin) {

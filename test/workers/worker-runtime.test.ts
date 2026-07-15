@@ -1,6 +1,7 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../../src/index";
+import { isCloudflareWorkerRuntime } from "../../src/api/routes";
 
 describe("worker runtime", () => {
   it("serves public metadata and keeps private routes locked in the Workers runtime", async () => {
@@ -16,5 +17,15 @@ describe("worker runtime", () => {
 
     const mcp = await worker.fetch(new Request("https://gittensory.test/mcp", { method: "POST" }), {} as Env, createExecutionContext());
     expect(mcp.status).toBe(401);
+  });
+
+  it("REGRESSION: isCloudflareWorkerRuntime() is true in a real Workers isolate (the gate that lets the Sentry middleware register at all)", () => {
+    expect(isCloudflareWorkerRuntime()).toBe(true);
+    expect(navigator.userAgent).toBe("Cloudflare-Workers");
+  });
+
+  it("still serves a normal response when WORKER_SENTRY_DSN is unset -- the Sentry middleware being registered must not itself break requests", async () => {
+    const res = await worker.fetch(new Request("https://gittensory.test/health"), { WORKER_SENTRY_DSN: undefined } as unknown as Env, createExecutionContext());
+    expect(res.status).toBe(200);
   });
 });

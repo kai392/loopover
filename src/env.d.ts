@@ -164,6 +164,15 @@ declare global {
     /** Webhook secret for the central LoopOver Orb GitHub App (#1255) — distinct from the review app's
      *  GITHUB_WEBHOOK_SECRET. Verifies inbound POST /v1/orb/webhook deliveries. Inject as a wrangler secret. */
     ORB_GITHUB_WEBHOOK_SECRET?: string;
+    /** Cloudflare Worker error tracking (@sentry/hono/cloudflare). Deliberately NAMED DIFFERENTLY from
+     *  self-host's own SENTRY_DSN (src/selfhost/sentry.ts): server.ts synthesizes a Worker-shaped `env` by
+     *  spreading `process.env` and calls the SAME shared `worker.fetch` this Worker exports, so reusing the
+     *  self-host var name would silently activate the Cloudflare-only SDK inside a self-hoster's own Node
+     *  process the moment they set their OWN SENTRY_DSN — an unrelated, unintended cross-wire. Opt-in like
+     *  every other Sentry var in this codebase: a complete no-op (routes.ts's isCloudflareWorkerRuntime guard
+     *  AND this being unset) until both are true. Inject as a wrangler secret. */
+    WORKER_SENTRY_DSN?: string;
+    WORKER_SENTRY_ENVIRONMENT?: string;
     /** The central Orb GitHub App's OWN credentials (separate from the loopover review App above). Inject as
      *  wrangler secrets. Used to mint the Orb App JWT → list installations + mint short-lived installation tokens
      *  (the token-broker). CLIENT_ID/SECRET drive the OAuth onboarding flow. */
