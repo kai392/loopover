@@ -236,6 +236,43 @@ describe("createAgentSdkCodingAgentDriver", () => {
     expect((await nonNumericFields.run(task)).tokensUsed).toBeUndefined();
   });
 
+  // #5827: a malformed num_turns/total_cost_usd (negative, NaN, Infinity) must degrade to undefined — the same
+  // finite/non-negative discipline cli-subprocess-driver.ts applies — so it never reaches accumulateAttemptUsage,
+  // which throws a RangeError on such input and would reject the whole iterate loop before its decision is logged.
+  it("turnsUsed degrades to undefined for a negative, NaN, or Infinity num_turns (#5827)", async () => {
+    for (const badTurns of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const driver = driverWith({
+        query: queryYielding([{ type: "result", subtype: "success", is_error: false, num_turns: badTurns, result: "done" }]),
+      });
+      expect((await driver.run(task)).turnsUsed).toBeUndefined();
+    }
+  });
+
+  it("costUsd degrades to undefined for a negative, NaN, or Infinity total_cost_usd (#5827)", async () => {
+    for (const badCost of [-0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const driver = driverWith({
+        query: queryYielding([{ type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", total_cost_usd: badCost }]),
+      });
+      expect((await driver.run(task)).costUsd).toBeUndefined();
+    }
+  });
+
+  it("tokensUsed ignores a negative/NaN/Infinity usage field instead of poisoning the sum (#5827)", async () => {
+    const partiallyBad = driverWith({
+      query: queryYielding([
+        { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", usage: { input_tokens: 100, output_tokens: -5 } },
+      ]),
+    });
+    expect((await partiallyBad.run(task)).tokensUsed).toBe(100);
+
+    const allBad = driverWith({
+      query: queryYielding([
+        { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", usage: { input_tokens: Number.NaN, output_tokens: Number.POSITIVE_INFINITY } },
+      ]),
+    });
+    expect((await allBad.run(task)).tokensUsed).toBeUndefined();
+  });
+
   it("tokensUsed sums whichever of input/output tokens IS a real number, when only input is present", async () => {
     const driver = driverWith({
       query: queryYielding([

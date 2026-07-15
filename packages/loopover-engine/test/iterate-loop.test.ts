@@ -262,6 +262,37 @@ test("abandon (cost_ceiling_reached): a maxCostUsd budget breach reports costUsd
   assert.equal(result.finalMeterTotals.costUsd, 6);
 });
 
+// #5827: an out-of-contract usage value from a driver (negative/NaN/Infinity) must NOT let accumulateAttemptUsage
+// throw a RangeError out of runIterateLoopCore before the iteration's decision is logged. The loop must still
+// complete, record its decision, and clamp the poisoned axis to 0 rather than rejecting uncaught.
+test("does not reject uncaught when a driver reports an out-of-contract usage value; still logs a decision (#5827)", async () => {
+  for (const badTurns of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const { deps, events } = collectingDeps({
+      driver: driverReturning({ ok: true, changedFiles: ["src/upload.ts"], summary: "x", turnsUsed: badTurns as number }),
+    });
+    const result = await runIterateLoop(passingInput({ maxIterations: 3 }), deps);
+
+    assert.equal(result.outcome, "handoff", `turnsUsed=${String(badTurns)} must not crash the loop`);
+    assert.ok(
+      events.some((event) => event.actionClass === "iterate_loop"),
+      "an iterate_loop decision must still be logged despite the out-of-contract usage value",
+    );
+    // The poisoned axis is clamped to 0, not propagated as a negative/NaN/Infinity total.
+    assert.equal(result.finalMeterTotals.turns, 0);
+  }
+});
+
+test("clamps only the out-of-contract axis, preserving a valid axis on the same iteration (#5827)", async () => {
+  const { deps } = collectingDeps({
+    driver: driverReturning({ ok: true, changedFiles: ["src/upload.ts"], summary: "x", turnsUsed: Number.NaN, costUsd: 0.02 }),
+  });
+  const result = await runIterateLoop(passingInput({ maxIterations: 3 }), deps);
+
+  assert.equal(result.outcome, "handoff");
+  assert.equal(result.finalMeterTotals.turns, 0); // NaN clamped
+  assert.equal(result.finalMeterTotals.costUsd, 0.02); // valid axis preserved
+});
+
 test("abandon (cost_ceiling_reached): a maxWallClockMs budget breach uses the real injected clock, not a fabricated duration", async () => {
   let call = 0;
   const timestamps = [1_000, 1_000 + 90_000]; // 90s elapsed on the one iteration

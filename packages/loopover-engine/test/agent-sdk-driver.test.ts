@@ -196,6 +196,47 @@ test("tokensUsed is undefined when usage exists but is malformed (not an object,
   assert.equal(nonNumericResult.tokensUsed, undefined);
 });
 
+// #5827: a malformed num_turns/total_cost_usd (negative, NaN, Infinity) must degrade to undefined — the same
+// finite/non-negative discipline cli-subprocess-driver.ts applies — so it never reaches accumulateAttemptUsage
+// (attempt-metering.ts), which throws a RangeError on such input and would reject the whole iterate loop.
+test("turnsUsed degrades to undefined for a negative, NaN, or Infinity num_turns (#5827)", async () => {
+  for (const badTurns of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const driver = driverWith({
+      query: queryYielding([{ type: "result", subtype: "success", is_error: false, num_turns: badTurns, result: "done" }]),
+    });
+    const result = await driver.run(task);
+    assert.equal(result.turnsUsed, undefined, `num_turns=${String(badTurns)} should degrade to undefined`);
+  }
+});
+
+test("costUsd degrades to undefined for a negative, NaN, or Infinity total_cost_usd (#5827)", async () => {
+  for (const badCost of [-0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    const driver = driverWith({
+      query: queryYielding([{ type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", total_cost_usd: badCost }]),
+    });
+    const result = await driver.run(task);
+    assert.equal(result.costUsd, undefined, `total_cost_usd=${String(badCost)} should degrade to undefined`);
+  }
+});
+
+test("tokensUsed ignores a negative/NaN/Infinity usage field instead of poisoning the sum (#5827)", async () => {
+  // output_tokens is out-of-contract (negative); input_tokens is valid — the sum uses only the valid field.
+  const partiallyBad = driverWith({
+    query: queryYielding([
+      { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", usage: { input_tokens: 100, output_tokens: -5 } },
+    ]),
+  });
+  assert.equal((await partiallyBad.run(task)).tokensUsed, 100);
+
+  // Both fields out-of-contract → undefined (never a fabricated 0 or a NaN/Infinity sum).
+  const allBad = driverWith({
+    query: queryYielding([
+      { type: "result", subtype: "success", is_error: false, num_turns: 2, result: "done", usage: { input_tokens: Number.NaN, output_tokens: Number.POSITIVE_INFINITY } },
+    ]),
+  });
+  assert.equal((await allBad.run(task)).tokensUsed, undefined);
+});
+
 test("tokensUsed sums whichever of input/output tokens IS a real number, when only input is present", async () => {
   const driver = driverWith({
     query: queryYielding([

@@ -276,6 +276,16 @@ function logDecision(
  * respectively) before ever reaching its `"continue"` fallthrough, so `outcome.kind === "fail"` is guaranteed
  * whenever this is reached from the real call site below, not just the common case.
  */
+/** A finite, non-negative usage value, else 0. accumulateAttemptUsage (attempt-metering.ts) deliberately THROWS
+ *  a RangeError on a negative/non-finite input to protect its own direct callers; this call site sits outside the
+ *  loop's driver/self-review try/catch blocks, so an uncaught throw here would reject runIterateLoopCore before
+ *  its decision is logged, violating the loop's "every iteration's decision is recorded before returning" contract
+ *  (#5827). The Agent SDK driver now degrades bad usage fields to undefined at the source, but this call takes any
+ *  driver's result — clamp here too so no current or future driver can crash the loop instead of being governed. */
+function finiteNonNegativeUsage(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
 function blockerCodesFromContinuingOutcome(outcome: SelfReviewOutcome): readonly string[] {
   if (outcome.kind === "fail") return outcome.blockerCodes;
   /* v8 ignore next -- unreachable: see this function's own doc comment above. */
@@ -410,10 +420,10 @@ async function runIterateLoopCore(input: IterateLoopInput, deps: IterateLoopDeps
     // that reports one (Agent SDK's own result-message usage, or CLI JSON/JSONL stdout) -- 0 only when the
     // driver genuinely reports no token signal for this iteration, same honest-absence discipline as costUsd.
     tracker.totals = accumulateAttemptUsage(tracker.totals, {
-      tokens: driverResult.tokensUsed ?? 0,
-      turns: driverResult.turnsUsed ?? 0,
+      tokens: finiteNonNegativeUsage(driverResult.tokensUsed),
+      turns: finiteNonNegativeUsage(driverResult.turnsUsed),
       wallClockMs: iterationElapsedMs,
-      costUsd: driverResult.costUsd ?? 0,
+      costUsd: finiteNonNegativeUsage(driverResult.costUsd),
     });
     const budgetVerdict = input.budget !== undefined ? evaluateAttemptBudget(tracker.totals, input.budget) : undefined;
     tracker.breaches = budgetVerdict?.breaches ?? [];

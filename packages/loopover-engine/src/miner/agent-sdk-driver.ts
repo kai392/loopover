@@ -76,16 +76,25 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
+/** A finite, non-negative number, else undefined — mirrors `cli-subprocess-driver.ts`'s helper of the same name
+ *  so both drivers reject the same out-of-contract usage values (`NaN`, `Infinity`, negatives) from untrusted
+ *  driver output. A malformed value degrades to the driver's existing "field absent" contract (undefined) rather
+ *  than propagating downstream, where `attempt-metering.ts`'s accumulateAttemptUsage would throw a RangeError and
+ *  reject the whole iterate loop before its decision is ever logged (#5827). */
+function finiteNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 /** Real token count from the SDK's own result message (#5653). Both `SDKResultSuccess` and `SDKResultError`
  *  declare `usage: NonNullableUsage` unconditionally -- present whenever a result message arrived at all, same
  *  as `total_cost_usd`. `NonNullableUsage`'s `input_tokens`/`output_tokens` are themselves non-nullable numbers
  *  once `usage` exists, but this driver reads `resultMessage` as a loosely-typed record (like every other field
- *  read here), so both are re-validated defensively rather than trusted from an untyped source. Returns
- *  undefined (never a fabricated 0) when `usage` is absent or malformed. */
+ *  read here), so both are re-validated defensively (finite + non-negative, #5827) rather than trusted from an
+ *  untyped source. Returns undefined (never a fabricated 0) when `usage` is absent or malformed. */
 function tokensFromResultMessage(resultMessage: Record<string, unknown> | null): number | undefined {
   const usage = asRecord(resultMessage?.usage);
-  const inputTokens = typeof usage?.input_tokens === "number" ? usage.input_tokens : undefined;
-  const outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : undefined;
+  const inputTokens = finiteNonNegativeNumber(usage?.input_tokens);
+  const outputTokens = finiteNonNegativeNumber(usage?.output_tokens);
   if (inputTokens === undefined && outputTokens === undefined) return undefined;
   return (inputTokens ?? 0) + (outputTokens ?? 0);
 }
@@ -175,13 +184,14 @@ export function createAgentSdkCodingAgentDriver(
         };
       }
 
-      const turnsUsed =
-        typeof resultMessage?.num_turns === "number" ? resultMessage.num_turns : undefined;
+      // finiteNonNegativeNumber (not a bare typeof check): a malformed num_turns/total_cost_usd (NaN, Infinity,
+      // negative) must degrade to undefined here, or it reaches accumulateAttemptUsage unguarded and throws a
+      // RangeError that rejects runIterateLoopCore before any decision is logged (#5827).
+      const turnsUsed = finiteNonNegativeNumber(resultMessage?.num_turns);
       // Real dollar cost: the SDK's own SDKResultSuccess/SDKResultError message types both declare
       // `total_cost_usd: number` unconditionally -- present whenever a result message arrived at all, success
       // or not (the session was billed either way), absent only when the stream produced no result message.
-      const costUsd =
-        typeof resultMessage?.total_cost_usd === "number" ? resultMessage.total_cost_usd : undefined;
+      const costUsd = finiteNonNegativeNumber(resultMessage?.total_cost_usd);
       const tokensUsed = tokensFromResultMessage(resultMessage);
       const resultText =
         typeof resultMessage?.result === "string" ? redactSecrets(resultMessage.result) : "";
