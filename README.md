@@ -26,6 +26,27 @@ LoopOver keeps sensitive context private by default.
 - Public GitHub comments never include wallet, hotkey, reward estimate, private ranking, raw trust score, or reviewability context.
 - Optional AI summaries receive compact deterministic signal bundles, not raw source code.
 - Maintainer packets and scoring context stay on protected API/MCP surfaces.
+- MCP tool-call telemetry is an allowlist of four fields, and is anonymous — see below.
+
+### MCP telemetry
+
+A recorded MCP tool call carries exactly four fields, and there is no fifth: the **tool name**, which **surface**
+dispatched it (`remote` or `local`), whether it **succeeded**, and a **coarse duration** in milliseconds. The
+allowlist is the event shape itself rather than a filter over a richer one, so there is nowhere to put anything
+else.
+
+**Never tracked:** tool arguments, source contents, repository or issue text, and wallet, hotkey, coldkey, reward,
+private ranking, or raw trust-score data. Events also carry no per-actor identity — every event shares one
+constant, anonymous handle, so there is no per-user profile to accumulate — and IP-based geo enrichment is
+disabled.
+
+Each surface is controlled separately, and they differ in who holds the switch:
+
+- **Local CLI** (`@loopover/mcp`) — **opt-in, OFF by default.** Nothing is recorded unless you have run
+  `loopover-mcp telemetry enable`; an API key alone is not enough. `loopover-mcp telemetry status` reports the
+  current state, and `disable` removes the flag entirely.
+- **Hosted / remote MCP** — a **deployment** setting, not a per-user one: it records when the operator configures
+  `POSTHOG_API_KEY`, which the hosted service does. A self-hosted deployment that leaves it unset records nothing.
 
 See [Privacy and security](https://loopover.ai/docs/privacy-security) for the full boundary.
 

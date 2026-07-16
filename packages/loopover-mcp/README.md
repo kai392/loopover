@@ -285,6 +285,28 @@ loopover-mcp telemetry status
 
 Enabling persists a top-level `telemetryEnabled` flag in the same config file `loopover-mcp login` uses, so the choice survives across CLI invocations. `status`, `doctor`, and `config` all report the current opt-in state. Add `--json` to any of these for machine-readable output.
 
+Opting in is necessary but not sufficient: the CLI also needs `LOOPOVER_MCP_POSTHOG_API_KEY` to be set before
+anything leaves your machine. With the flag off — the default — the key is ignored entirely.
+
+### What a tool call records
+
+Exactly four fields, and there is no fifth:
+
+| Field | Example | What it is |
+|---|---|---|
+| `tool` | `predict_gate` | The MCP tool name. |
+| `caller_type` | `local` | Which surface dispatched it (`local` for this CLI). |
+| `ok` | `true` | Whether the call succeeded. |
+| `duration_ms` | `142` | Coarse wall-clock duration. |
+
+**Never recorded:** your tool arguments, source contents, diffs, repository or issue text, file paths, and any
+wallet, hotkey, coldkey, reward, private ranking, or raw trust-score data. Events carry no identity of yours
+either — every event shares one constant, anonymous handle, and IP-based geo enrichment is disabled — so the data
+is a fleet-level count of which tools get used, not a record of what you did.
+
+Telemetry is best-effort and never affects a command: if PostHog is unreachable or errors, the CLI records nothing
+and behaves exactly as it would with telemetry off.
+
 ## Offline decision-pack fallback
 
 Successful `decision-pack` and MCP `loopover_get_decision_pack` calls store a bounded last-good local cache entry keyed by API version and login. If the API or network is temporarily unavailable, the wrapper can return that last-good guidance as `source: "local_cache"` with `stale: true`, `cachedAt`, and rerun guidance. Auth and permission failures do not use stale fallback data.
