@@ -7,12 +7,6 @@ import {
 } from "@/lib/maintainer-settings-editable";
 
 const SETTINGS: MaintainerSettingsEditable = {
-  commentMode: "detected_contributors_only",
-  publicAudienceMode: "oss_maintainer",
-  publicSignalLevel: "standard",
-  publicSurface: "comment_and_label",
-  checkRunMode: "enabled",
-  checkRunDetailLevel: "standard",
   reviewCheckMode: "required",
   gatePack: "gittensor",
   linkedIssueGateMode: "advisory",
@@ -28,7 +22,6 @@ const SETTINGS: MaintainerSettingsEditable = {
   autoLabelEnabled: true,
   gittensorLabel: "gittensor",
   createMissingLabel: true,
-  includeMaintainerAuthors: false,
   requireLinkedIssue: false,
   badgeEnabled: false,
   publicQualityMetrics: false,
@@ -44,7 +37,7 @@ describe("maintainer-settings-editable (#2218)", () => {
     const payload = buildMaintainerSettingsSavePayload(SETTINGS);
     expect(Object.keys(payload).sort()).toEqual([...MAINTAINER_SETTINGS_EDITABLE_KEYS].sort());
     expect(payload.linkedIssueGateMode).toBe("advisory");
-    expect(payload.commentMode).toBe("detected_contributors_only");
+    expect(payload.gittensorLabel).toBe("gittensor");
   });
 
   it("buildMaintainerSettingsSavePayload merges a partial patch over the base settings", () => {
@@ -56,7 +49,7 @@ describe("maintainer-settings-editable (#2218)", () => {
     expect(payload.duplicatePrGateMode).toBe("block");
     // Untouched fields pass through unchanged.
     expect(payload.qualityGateMode).toBe("advisory");
-    expect(payload.commentMode).toBe("detected_contributors_only");
+    expect(payload.gittensorLabel).toBe("gittensor");
   });
 
   it("an empty patch object is a no-op (same as omitting it)", () => {

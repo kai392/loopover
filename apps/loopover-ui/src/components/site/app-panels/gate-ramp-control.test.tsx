@@ -21,12 +21,6 @@ import { GateRampControl } from "@/components/site/app-panels/gate-ramp-control"
 const REVIEWABILITY = [{ pr: "acme/widgets#1" }];
 
 const ADVISORY_SETTINGS = {
-  commentMode: "detected_contributors_only" as const,
-  publicAudienceMode: "oss_maintainer" as const,
-  publicSignalLevel: "standard" as const,
-  publicSurface: "comment_and_label" as const,
-  checkRunMode: "enabled" as const,
-  checkRunDetailLevel: "standard" as const,
   reviewCheckMode: "required" as const,
   gatePack: "gittensor" as const,
   linkedIssueGateMode: "advisory" as const,
@@ -42,7 +36,6 @@ const ADVISORY_SETTINGS = {
   autoLabelEnabled: true,
   gittensorLabel: "gittensor",
   createMissingLabel: true,
-  includeMaintainerAuthors: false,
   requireLinkedIssue: false,
   badgeEnabled: false,
   publicQualityMetrics: false,
@@ -108,7 +101,7 @@ describe("GateRampControl (#2218)", () => {
     expect(body.linkedIssueGateMode).toBe("block");
     expect(body.duplicatePrGateMode).toBe("block");
     expect(body.qualityGateMode).toBe("block");
-    expect(body.commentMode).toBe("detected_contributors_only");
+    expect(body.gittensorLabel).toBe("gittensor");
   });
 
   it("closes confirm without saving when cancel is clicked", async () => {

@@ -30,6 +30,7 @@ import {
   upsertRepositoryFromGitHub,
   upsertRepositorySettings,
 } from "../../src/db/repositories";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import {
   backfillOpenPullRequestDetails,
   backfillRegisteredRepositories,
@@ -62,7 +63,6 @@ import {
 } from "../../src/github/client";
 import { normalizeRegistryPayload } from "../../src/registry/normalize";
 import { persistRegistrySnapshot } from "../../src/registry/sync";
-import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { renderMetrics, resetMetrics } from "../../src/selfhost/metrics";
 import { createTestEnv } from "../helpers/d1";
 
@@ -1010,6 +1010,7 @@ describe("GitHub backfill", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
     });
+    // checkRunMode moved off the DB entirely (Batch A, loopover#6442) -- set via manifest injection instead.
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { checkRunMode: "enabled" } });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
@@ -1180,13 +1181,10 @@ describe("GitHub backfill", () => {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: false,
     });
-    await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
-      settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off" },
-    });
-    // Without this, the manifest resolver's live (unmocked) GitHub fetch for "JSONbored/gittensory"'s
-    // .loopover.yml actually succeeds -- GitHub's repo-rename redirect resolves it to this same repo's
-    // CURRENT .loopover.yml, which now grants full agent autonomy -- silently upgrading the required
-    // permissions this test asserts are absent. Force the fetch to a deterministic 404 instead.
+    // commentMode/publicSurface/checkRunMode moved off the DB entirely (Batch A, loopover#6442) -- set via
+    // manifest injection instead. The pre-cached row means the loader never calls fetch for this repo, but
+    // stub it defensively anyway so this test never depends on live network either way.
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off" } });
     vi.stubGlobal("fetch", async () => new Response("Not Found", { status: 404 }));
 
     const repair = await buildInstallationRepairDiagnostics(env, {
@@ -1425,6 +1423,8 @@ describe("GitHub backfill", () => {
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
     });
+    // commentMode/publicSignalLevel/checkRunMode/checkRunDetailLevel/backfillEnabled moved off the DB
+    // entirely (Batch A, loopover#6442) -- set via manifest injection instead.
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
       settings: { commentMode: "off", publicSignalLevel: "standard", checkRunMode: "enabled", checkRunDetailLevel: "standard", backfillEnabled: false },
     });

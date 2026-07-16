@@ -411,18 +411,6 @@ describe("api routes", () => {
     await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/badged", badgeEnabled: true });
   });
 
-  it("REGRESSION (#2907): defaults checkRunDetailLevel to minimal, matching the DB column's own default, when omitted", async () => {
-    const app = createApp();
-    const env = createTestEnv();
-    const response = await app.request(
-      "/v1/internal/repos/acme/detail-level-default/settings",
-      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify({ checkRunMode: "enabled" }) },
-      env,
-    );
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ checkRunMode: "enabled", checkRunDetailLevel: "minimal" });
-  });
-
   it("downgrades qualityGateMode: block to advisory through the internal settings write endpoint too (#2267)", async () => {
     // Readiness/quality can never hard-block a PR — the internal full-settings write path (used by tooling,
     // not just the maintainer dashboard) gets the identical downgrade so it can't persist "block" either.
@@ -2171,6 +2159,10 @@ describe("api routes", () => {
     // .loopover.yml succeeds via GitHub's repo-rename redirect and returns the CURRENT (broader) autonomy
     // grant, which would upgrade requiredPermissions beyond what this test asserts.
     vi.stubGlobal("fetch", async () => new Response("Not Found", { status: 404 }));
+    // commentMode/publicSurface/checkRunMode moved off the DB entirely (Batch A, loopover#6442) -- the
+    // hardcoded defaults (commentMode: detected_contributors_only, publicSurface: comment_and_label,
+    // checkRunMode: off) already satisfy usesCommentMode/usesLabelMode's conditions below, so no manifest
+    // override is needed for this first assertion block.
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       autoLabelEnabled: true,
@@ -4621,7 +4613,7 @@ describe("api routes", () => {
     expect(queuedBurden.status).toBe(202);
     const queuedSignals = await app.request("/v1/internal/jobs/generate-signal-snapshots", { method: "POST", headers: internalHeaders, body: JSON.stringify({ repoFullName: "owner/repo" }) }, env);
     expect(queuedSignals.status).toBe(202);
-    expect((await app.request("/v1/internal/repos/owner/repo/settings", { method: "POST", headers: internalHeaders, body: JSON.stringify({ commentMode: "bad" }) }, env)).status).toBe(400);
+    expect((await app.request("/v1/internal/repos/owner/repo/settings", { method: "POST", headers: internalHeaders, body: JSON.stringify({ reviewCheckMode: "bad" }) }, env)).status).toBe(400);
   });
 
   it("settings-preview never mutates GitHub state", async () => {
@@ -6066,12 +6058,13 @@ describe("api routes", () => {
 
     await upsertRepositorySettings(env, {
       repoFullName: "entrius/allways-ui",
-      publicSurface: "off",
       requireLinkedIssue: true,
       autoLabelEnabled: false,
       createMissingLabel: false,
       gittensorLabel: "gittensor-miner",
     });
+    // publicSurface moved off the DB entirely (Batch A, loopover#6442) -- set via manifest injection instead.
+    await upsertRepoFocusManifest(env, "entrius/allways-ui", { settings: { publicSurface: "off" } });
     const directReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(directReadiness.status).toBe(200);
     await expect(directReadiness.json()).resolves.toMatchObject({
@@ -6086,6 +6079,7 @@ describe("api routes", () => {
       maintainerNotes: [
         "Private reviewability note with wallet, hotkey, raw trust, and farming details.",
       ],
+      settings: { publicSurface: "off" },
     });
     const policyReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(policyReadiness.status).toBe(200);
@@ -6457,7 +6451,7 @@ describe("api routes", () => {
     expect(signalsOne.status).toBe(202);
     const invalidSettings = await app.request(
       "/v1/internal/repos/owner/repo/settings",
-      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` }, body: JSON.stringify({ commentMode: "loud" }) },
+      { method: "POST", headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` }, body: JSON.stringify({ reviewCheckMode: "loud" }) },
       env,
     );
     expect(invalidSettings.status).toBe(400);
@@ -6539,7 +6533,7 @@ describe("api routes", () => {
       "/v1/internal/repos/entrius/allways-ui/settings",
       {
         method: "POST",
-        body: JSON.stringify({ commentMode: "detected_contributors_only", publicSignalLevel: "minimal" }),
+        body: JSON.stringify({ gatePack: "oss-anti-slop" }),
       },
       env,
     );
@@ -6551,8 +6545,6 @@ describe("api routes", () => {
         method: "POST",
         headers: { authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` },
         body: JSON.stringify({
-          commentMode: "detected_contributors_only",
-          publicSignalLevel: "minimal",
           gatePack: "oss-anti-slop",
           commandAuthorization: { default: ["maintainer"], commands: { preflight: ["pr_author"], "queue-summary": ["maintainer", "collaborator"] } },
         }),
@@ -6561,15 +6553,13 @@ describe("api routes", () => {
     );
     expect(updated.status).toBe(200);
     await expect(updated.json()).resolves.toMatchObject({
-      commentMode: "detected_contributors_only",
-      publicSignalLevel: "minimal",
       gatePack: "oss-anti-slop",
       commandAuthorization: { default: ["maintainer"], commands: expect.objectContaining({ preflight: ["pr_author"] }) },
     });
 
     const settings = await app.request("/v1/repos/entrius/allways-ui/settings", { headers: apiHeaders(env) }, env);
     expect(settings.status).toBe(200);
-    await expect(settings.json()).resolves.toMatchObject({ commentMode: "detected_contributors_only", gatePack: "oss-anti-slop", commandAuthorization: { commands: expect.objectContaining({ preflight: ["pr_author"] }) } });
+    await expect(settings.json()).resolves.toMatchObject({ gatePack: "oss-anti-slop", commandAuthorization: { commands: expect.objectContaining({ preflight: ["pr_author"] }) } });
 
     const preview = await app.request(
       "/v1/repos/entrius/allways-ui/settings-preview",

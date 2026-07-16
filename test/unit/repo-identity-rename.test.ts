@@ -97,21 +97,21 @@ describe("renameRepositoryIdentity", () => {
     // these assert on the raw row directly to distinguish "no row" / "renamed row" / "folded row".
     it("renames the settings row's repo_full_name", async () => {
       const env = createTestEnv();
-      await upsertRepositorySettings(env, { repoFullName: OLD, commentMode: "off" });
+      await upsertRepositorySettings(env, { repoFullName: OLD, gittensorLabel: "marker-old" });
       await renameRepositoryIdentity(env, OLD, NEW);
       const oldRow = await env.DB.prepare("select count(*) as n from repository_settings where repo_full_name = ?").bind(OLD).first<{ n: number }>();
       expect(oldRow?.n).toBe(0);
       const settings = await getRepositorySettings(env, NEW);
-      expect(settings.commentMode).toBe("off");
+      expect(settings.gittensorLabel).toBe("marker-old");
     });
 
     it("REGRESSION (#repo-rename-migration): folds away a stray new-name settings row, keeping the pre-existing configured settings", async () => {
       const env = createTestEnv();
-      await upsertRepositorySettings(env, { repoFullName: OLD, commentMode: "detected_contributors_only" });
-      await upsertRepositorySettings(env, { repoFullName: NEW, commentMode: "off" }); // stray, should be discarded
+      await upsertRepositorySettings(env, { repoFullName: OLD, gittensorLabel: "marker-configured" });
+      await upsertRepositorySettings(env, { repoFullName: NEW, gittensorLabel: "marker-stray" }); // stray, should be discarded
       await renameRepositoryIdentity(env, OLD, NEW);
       const settings = await getRepositorySettings(env, NEW);
-      expect(settings.commentMode).toBe("detected_contributors_only");
+      expect(settings.gittensorLabel).toBe("marker-configured");
       const newRowCount = await env.DB.prepare("select count(*) as n from repository_settings where repo_full_name = ?").bind(NEW).first<{ n: number }>();
       expect(newRowCount?.n).toBe(1); // exactly one surviving row, not two
     });

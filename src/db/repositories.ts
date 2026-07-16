@@ -656,12 +656,15 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
   }
   return {
     repoFullName: row.repoFullName,
-    commentMode: parseCommentMode(row.commentMode),
-    publicAudienceMode: parsePublicAudienceMode(row.publicAudienceMode),
-    publicSignalLevel: row.publicSignalLevel === "minimal" ? "minimal" : "standard",
-    checkRunMode: parseCheckRunMode(row.checkRunMode),
-    checkRunDetailLevel: parseCheckRunDetailLevel(row.checkRunDetailLevel),
-    regateSweepOrderMode: parseRegateSweepOrderMode(row.regateSweepOrderMode),
+    // Config-as-code only (Batch A, loopover#6442): no DB column backs these 9 fields anymore -- the
+    // built-in default here is unconditional (not row-dependent), matching the !row branch above.
+    // resolveEffectiveSettings still overlays a repo's .loopover.yml settings.* value over this default.
+    commentMode: "detected_contributors_only",
+    publicAudienceMode: "oss_maintainer",
+    publicSignalLevel: "standard",
+    checkRunMode: "off",
+    checkRunDetailLevel: "minimal",
+    regateSweepOrderMode: "staleness",
     reviewCheckMode: parseReviewCheckMode(row.reviewCheckMode),
     autoProjectMilestoneMatch: parseProjectMilestoneMatchMode(row.projectMilestoneMatchMode),
     autoProjectMilestoneMatchBackend: parseProjectMilestoneMatchBackend(row.autoProjectMilestoneMatchBackend),
@@ -693,10 +696,11 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     gittensorLabel: row.gittensorLabel,
     blacklistLabel: row.blacklistLabel,
     createMissingLabel: row.createMissingLabel,
-    publicSurface: parsePublicSurface(row.publicSurface),
-    includeMaintainerAuthors: row.includeMaintainerAuthors,
+    // Config-as-code only (Batch A, loopover#6442): see the comment on the reviewCheckMode block above.
+    publicSurface: "comment_and_label",
+    includeMaintainerAuthors: false,
     requireLinkedIssue: row.requireLinkedIssue,
-    backfillEnabled: row.backfillEnabled,
+    backfillEnabled: true,
     badgeEnabled: row.badgeEnabled,
     publicQualityMetrics: row.publicQualityMetrics,
     agentPaused: row.agentPaused,
@@ -773,12 +777,16 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
   // write path, can express "close without any label" via an explicit null; see focus-manifest.ts).
   const resolved = {
     repoFullName: settings.repoFullName,
-    commentMode: settings.commentMode ?? "detected_contributors_only",
-    publicAudienceMode: settings.publicAudienceMode ?? "oss_maintainer",
-    publicSignalLevel: settings.publicSignalLevel ?? "standard",
-    checkRunMode: settings.checkRunMode ?? "off",
-    checkRunDetailLevel: settings.checkRunDetailLevel ?? "minimal",
-    regateSweepOrderMode: settings.regateSweepOrderMode ?? "staleness",
+    // Config-as-code only (Batch A, loopover#6442): no DB column backs these 9 fields anymore -- any
+    // caller-supplied value is a silent no-op (there is nothing left to persist it to), so this always
+    // returns the same built-in default getRepositorySettings would, regardless of `settings.X` input.
+    // Configure these via a repo's .loopover.yml settings.* block instead.
+    commentMode: "detected_contributors_only",
+    publicAudienceMode: "oss_maintainer",
+    publicSignalLevel: "standard",
+    checkRunMode: "off",
+    checkRunDetailLevel: "minimal",
+    regateSweepOrderMode: "staleness",
     reviewCheckMode: settings.reviewCheckMode ?? "disabled",
     autoProjectMilestoneMatch: settings.autoProjectMilestoneMatch ?? "off",
     autoProjectMilestoneMatchBackend: settings.autoProjectMilestoneMatchBackend ?? "github",
@@ -809,10 +817,11 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     gittensorLabel: settings.gittensorLabel ?? "gittensor",
     blacklistLabel: settings.blacklistLabel ?? "slop",
     createMissingLabel: settings.createMissingLabel ?? true,
-    publicSurface: settings.publicSurface ?? "comment_and_label",
-    includeMaintainerAuthors: settings.includeMaintainerAuthors ?? false,
+    // Config-as-code only (Batch A, loopover#6442): see the comment on the reviewCheckMode block above.
+    publicSurface: "comment_and_label",
+    includeMaintainerAuthors: false,
     requireLinkedIssue: settings.requireLinkedIssue ?? false,
-    backfillEnabled: settings.backfillEnabled ?? true,
+    backfillEnabled: true,
     badgeEnabled: settings.badgeEnabled ?? false,
     publicQualityMetrics: settings.publicQualityMetrics ?? false,
     agentPaused: settings.agentPaused ?? false,
@@ -855,12 +864,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     .insert(repositorySettings)
     .values({
       repoFullName: resolved.repoFullName,
-      commentMode: resolved.commentMode,
-      publicAudienceMode: resolved.publicAudienceMode,
-      publicSignalLevel: resolved.publicSignalLevel,
-      checkRunMode: resolved.checkRunMode,
-      checkRunDetailLevel: resolved.checkRunDetailLevel,
-      regateSweepOrderMode: resolved.regateSweepOrderMode,
       reviewCheckMode: resolved.reviewCheckMode,
       projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
       autoProjectMilestoneMatchBackend: resolved.autoProjectMilestoneMatchBackend,
@@ -891,10 +894,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       gittensorLabel: resolved.gittensorLabel,
       blacklistLabel: resolved.blacklistLabel,
       createMissingLabel: resolved.createMissingLabel,
-      publicSurface: resolved.publicSurface,
-      includeMaintainerAuthors: resolved.includeMaintainerAuthors,
       requireLinkedIssue: resolved.requireLinkedIssue,
-      backfillEnabled: resolved.backfillEnabled,
       badgeEnabled: resolved.badgeEnabled,
       publicQualityMetrics: resolved.publicQualityMetrics,
       agentPaused: resolved.agentPaused,
@@ -943,12 +943,6 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     .onConflictDoUpdate({
       target: repositorySettings.repoFullName,
       set: {
-        commentMode: resolved.commentMode,
-        publicAudienceMode: resolved.publicAudienceMode,
-        publicSignalLevel: resolved.publicSignalLevel,
-        checkRunMode: resolved.checkRunMode,
-        checkRunDetailLevel: resolved.checkRunDetailLevel,
-        regateSweepOrderMode: resolved.regateSweepOrderMode,
         reviewCheckMode: resolved.reviewCheckMode,
       projectMilestoneMatchMode: resolved.autoProjectMilestoneMatch,
       autoProjectMilestoneMatchBackend: resolved.autoProjectMilestoneMatchBackend,
@@ -981,10 +975,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         gittensorLabel: resolved.gittensorLabel,
         blacklistLabel: resolved.blacklistLabel,
         createMissingLabel: resolved.createMissingLabel,
-        publicSurface: resolved.publicSurface,
-        includeMaintainerAuthors: resolved.includeMaintainerAuthors,
         requireLinkedIssue: resolved.requireLinkedIssue,
-        backfillEnabled: resolved.backfillEnabled,
         badgeEnabled: resolved.badgeEnabled,
         publicQualityMetrics: resolved.publicQualityMetrics,
         agentPaused: resolved.agentPaused,
@@ -7762,29 +7753,6 @@ function parseAgentRecommendationOutcomeConfidence(value: string): AgentRecommen
   return "medium";
 }
 
-function parseCommentMode(value: string): RepositorySettings["commentMode"] {
-  if (value === "detected_contributors_only" || value === "all_prs") return value;
-  return "off";
-}
-
-function parsePublicAudienceMode(value: string): RepositorySettings["publicAudienceMode"] {
-  return value === "gittensor_only" ? "gittensor_only" : "oss_maintainer";
-}
-
-function parseCheckRunMode(value: string): RepositorySettings["checkRunMode"] {
-  return value === "enabled" ? "enabled" : "off";
-}
-
-function parseCheckRunDetailLevel(value: string): RepositorySettings["checkRunDetailLevel"] {
-  // #4620: a pre-#4620 row persisted as "deep" degrades to "standard" here -- the two were always
-  // behaviorally identical (see the type's own doc comment), so this is a display-only fallback.
-  return value === "minimal" ? "minimal" : "standard";
-}
-
-function parseRegateSweepOrderMode(value: string): RepositorySettings["regateSweepOrderMode"] {
-  return value === "oldest-first" ? "oldest-first" : "staleness";
-}
-
 function parseReviewCheckMode(value: string): RepositorySettings["reviewCheckMode"] {
   return value === "required" || value === "visible" ? value : "disabled";
 }
@@ -7842,11 +7810,6 @@ function normalizePositiveIntOrNull(value: number | null | undefined): number | 
 function normalizeOpenItemCap(value: number | null | undefined): number | null {
   const parsed = normalizePositiveIntOrNull(value);
   return parsed === null ? null : Math.min(parsed, MAX_CONTRIBUTOR_OPEN_ITEM_CAP);
-}
-
-function parsePublicSurface(value: string): RepositorySettings["publicSurface"] {
-  if (value === "comment_only" || value === "label_only" || value === "off") return value;
-  return "comment_and_label";
 }
 
 function parseCommandAuthorizationPolicy(value: string): RepositorySettings["commandAuthorization"] {

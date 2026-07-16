@@ -115,11 +115,14 @@ function buildSummary(evaluated: number, withFindings: number, currentlyActive: 
  */
 export function recommendedAdvisoryActivationSettings(): Pick<
   RepositorySettings,
-  "reviewCheckMode" | "checkRunMode" | "linkedIssueGateMode" | "duplicatePrGateMode" | "qualityGateMode"
+  "reviewCheckMode" | "linkedIssueGateMode" | "duplicatePrGateMode" | "qualityGateMode"
 > {
+  // checkRunMode moved off the DB entirely (Batch A, loopover#6442) -- writing it via upsertRepositorySettings
+  // is now a silent no-op, so it's dropped from this one-click patch rather than pretending to activate it.
+  // Turning check-run mode on now requires a repo's own .loopover.yml settings.checkRunMode -- there is no
+  // config-as-code write mechanism this one-click action can use to set that on the maintainer's behalf.
   return {
     reviewCheckMode: "required",
-    checkRunMode: "enabled",
     linkedIssueGateMode: "advisory",
     duplicatePrGateMode: "advisory",
     qualityGateMode: "advisory",

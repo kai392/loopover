@@ -18,12 +18,6 @@ export type AgentActionClass =
 export type AutoMergeMethod = "merge" | "squash" | "rebase";
 
 export type MaintainerSettingsEditable = {
-  commentMode: "off" | "detected_contributors_only" | "all_prs";
-  publicAudienceMode: "oss_maintainer" | "gittensor_only";
-  publicSignalLevel: "minimal" | "standard";
-  publicSurface: "off" | "comment_and_label" | "comment_only" | "label_only";
-  checkRunMode: "off" | "enabled";
-  checkRunDetailLevel: "minimal" | "standard";
   // #4618/#5373: a prior gateCheckMode field was a deprecated computed read-back, since removed entirely --
   // reviewCheckMode is the real, writable authority for whether the review-agent check-run publishes.
   reviewCheckMode: "required" | "visible" | "disabled";
@@ -41,7 +35,6 @@ export type MaintainerSettingsEditable = {
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;
-  includeMaintainerAuthors: boolean;
   requireLinkedIssue: boolean;
   badgeEnabled: boolean;
   publicQualityMetrics: boolean;
@@ -54,12 +47,6 @@ export type MaintainerSettingsEditable = {
 
 // The maintainer-editable subset, sent verbatim to PUT /settings (which merges onto current settings).
 export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEditable> = [
-  "commentMode",
-  "publicAudienceMode",
-  "publicSignalLevel",
-  "publicSurface",
-  "checkRunMode",
-  "checkRunDetailLevel",
   "reviewCheckMode",
   "gatePack",
   "linkedIssueGateMode",
@@ -75,7 +62,6 @@ export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEd
   "autoLabelEnabled",
   "gittensorLabel",
   "createMissingLabel",
-  "includeMaintainerAuthors",
   "requireLinkedIssue",
   "badgeEnabled",
   "publicQualityMetrics",

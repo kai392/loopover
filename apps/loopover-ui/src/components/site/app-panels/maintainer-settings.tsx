@@ -142,65 +142,10 @@ const SLOP_FIELDS: FieldDef[] = [
   },
 ];
 
+// commentMode/publicSurface/publicSignalLevel/publicAudienceMode/checkRunMode/checkRunDetailLevel/
+// includeMaintainerAuthors moved off the dashboard entirely (Batch A, loopover#6442) -- configure them via
+// this repo's own .loopover.yml settings.* block instead.
 const SURFACE_FIELDS: FieldDef[] = [
-  {
-    key: "commentMode",
-    label: "Comment mode",
-    kind: "select",
-    options: [
-      ["off", "off"],
-      ["detected_contributors_only", "detected contributors only"],
-      ["all_prs", "all PRs"],
-    ],
-  },
-  {
-    key: "publicSurface",
-    label: "Public surface",
-    kind: "select",
-    options: [
-      ["off", "off"],
-      ["comment_and_label", "comment + label"],
-      ["comment_only", "comment only"],
-      ["label_only", "label only"],
-    ],
-  },
-  {
-    key: "publicSignalLevel",
-    label: "Public signal level",
-    kind: "select",
-    options: [
-      ["minimal", "minimal"],
-      ["standard", "standard"],
-    ],
-  },
-  {
-    key: "publicAudienceMode",
-    label: "Audience",
-    kind: "select",
-    options: [
-      ["oss_maintainer", "OSS maintainer"],
-      ["gittensor_only", "gittensor only"],
-    ],
-  },
-  {
-    key: "checkRunMode",
-    label: "Context check run",
-    kind: "select",
-    options: [
-      ["off", "off"],
-      ["enabled", "enabled"],
-    ],
-  },
-  {
-    key: "checkRunDetailLevel",
-    label: "Check detail",
-    kind: "select",
-    options: [
-      ["minimal", "minimal"],
-      ["standard", "standard"],
-    ],
-  },
-  { key: "includeMaintainerAuthors", label: "Include maintainer-authored PRs", kind: "toggle" },
   { key: "requireLinkedIssue", label: "Require a linked issue", kind: "toggle" },
   { key: "badgeEnabled", label: "Repo badge", kind: "toggle" },
   { key: "publicQualityMetrics", label: "Public quality page", kind: "toggle" },

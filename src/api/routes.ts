@@ -277,7 +277,7 @@ import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from ".
 import { buildMaintainerSlopDuplicateTrend, SLOP_DUPLICATE_TREND_SNAPSHOT_LIMIT } from "../services/maintainer-slop-duplicate-trend";
 import { buildGateOutcomeBreakdown, GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS } from "../services/gate-outcome-breakdown";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
-import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode } from "../signals/focus-manifest";
+import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, normalizeReadinessGateMode, resolveEffectiveSettings } from "../signals/focus-manifest";
 import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadPublicRepoFocusManifest, loadRepoFocusManifest, upsertRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { buildRepoOnboardingPackPreviewForRepo } from "../services/repo-onboarding-pack";
@@ -663,15 +663,6 @@ const agentPlanSchema = z
 const agentExplainBlockersSchema = z.union([localBranchAnalysisSchema, agentPlanSchema]);
 
 const repositorySettingsSchema = z.object({
-  commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]).default("detected_contributors_only"),
-  publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]).default("oss_maintainer"),
-  publicSignalLevel: z.enum(["minimal", "standard"]).default("standard"),
-  checkRunMode: z.enum(["off", "enabled"]).default("off"),
-  // Matches repository_settings.check_run_detail_level's own column default (#2907) -- the Context check's
-  // public output is intentionally minimal by design (see formatCheckRunOutput's doc comment), so a caller of
-  // this full-replace route that omits this field must land on the same safe default as a never-configured row.
-  checkRunDetailLevel: z.enum(["minimal", "standard"]).default("minimal"),
-  regateSweepOrderMode: z.enum(["staleness", "oldest-first"]).default("staleness"),
   // #4618/#5373: this write schema never accepted a gateCheckMode field -- it was a deprecated computed
   // read-back of reviewCheckMode, removed from RepositorySettings entirely in #5373. Set reviewCheckMode
   // directly.
@@ -692,10 +683,7 @@ const repositorySettingsSchema = z.object({
   gittensorLabel: z.string().trim().min(1).max(50).default("gittensor"),
   blacklistLabel: z.string().trim().min(1).max(50).default("slop"),
   createMissingLabel: z.boolean().default(true),
-  publicSurface: z.enum(["off", "comment_and_label", "comment_only", "label_only"]).default("comment_and_label"),
-  includeMaintainerAuthors: z.boolean().default(false),
   requireLinkedIssue: z.boolean().default(false),
-  backfillEnabled: z.boolean().default(true),
   badgeEnabled: z.boolean().default(false),
   publicQualityMetrics: z.boolean().default(false),
   commandAuthorization: z
@@ -719,13 +707,6 @@ const repositorySettingsSchema = z.object({
 // rather than preserving it.
 const maintainerSettingsSchema = z
   .object({
-    commentMode: z.enum(["off", "detected_contributors_only", "all_prs"]),
-    publicAudienceMode: z.enum(["oss_maintainer", "gittensor_only"]),
-    publicSignalLevel: z.enum(["minimal", "standard"]),
-    publicSurface: z.enum(["off", "comment_and_label", "comment_only", "label_only"]),
-    checkRunMode: z.enum(["off", "enabled"]),
-    checkRunDetailLevel: z.enum(["minimal", "standard"]),
-    regateSweepOrderMode: z.enum(["staleness", "oldest-first"]),
     reviewCheckMode: z.enum(["required", "visible", "disabled"]),
     gatePack: z.enum(["gittensor", "oss-anti-slop"]),
     linkedIssueGateMode: z.enum(["off", "advisory", "block"]),
@@ -747,7 +728,6 @@ const maintainerSettingsSchema = z
     gittensorLabel: z.string().trim().min(1).max(50),
     blacklistLabel: z.string().trim().min(1).max(50),
     createMissingLabel: z.boolean(),
-    includeMaintainerAuthors: z.boolean(),
     closeOwnerAuthors: z.boolean(),
     requireLinkedIssue: z.boolean(),
     badgeEnabled: z.boolean(),
@@ -2534,7 +2514,10 @@ export function createApp() {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const gate = await requireRepoMaintainer(c, fullName);
     if (gate instanceof Response) return gate;
-    return c.json(await getRepositorySettings(c.env, fullName));
+    // resolveRepositorySettings (not the raw getRepositorySettings row), so this reflects the true EFFECTIVE
+    // value -- a config-as-code-only field (Batch A, loopover#6442) would otherwise always show its hardcoded
+    // default here regardless of what the repo's .loopover.yml actually configures.
+    return c.json(await resolveRepositorySettings(c.env, fullName));
   });
 
   // #130 maintainer settings editor: PATCH-style save of the gate / slop / label / surface / command-auth
@@ -2770,10 +2753,12 @@ export function createApp() {
     if (gate instanceof Response) return gate;
     const current = await getRepositorySettings(c.env, fullName);
     const updated = await upsertRepositorySettings(c.env, { ...current, ...recommendedAdvisoryActivationSettings() });
+    // checkRunMode dropped (Batch A, loopover#6442): recommendedAdvisoryActivationSettings() no longer sets
+    // it (writing it is now a no-op), so echoing updated.checkRunMode here would just always report the
+    // hardcoded default regardless of what this activation actually did.
     return c.json({
       repoFullName: fullName,
       reviewCheckMode: updated.reviewCheckMode,
-      checkRunMode: updated.checkRunMode,
       linkedIssueGateMode: updated.linkedIssueGateMode,
       duplicatePrGateMode: updated.duplicatePrGateMode,
       qualityGateMode: updated.qualityGateMode,
@@ -4229,12 +4214,6 @@ export function createApp() {
     return c.json(
       await upsertRepositorySettings(c.env, {
         repoFullName: fullName,
-        commentMode: parsed.data.commentMode,
-        publicAudienceMode: parsed.data.publicAudienceMode,
-        publicSignalLevel: parsed.data.publicSignalLevel,
-        checkRunMode: parsed.data.checkRunMode,
-        checkRunDetailLevel: parsed.data.checkRunDetailLevel,
-        regateSweepOrderMode: parsed.data.regateSweepOrderMode,
         reviewCheckMode: parsed.data.reviewCheckMode,
         gatePack: parsed.data.gatePack,
         linkedIssueGateMode: parsed.data.linkedIssueGateMode,
@@ -4252,10 +4231,7 @@ export function createApp() {
         gittensorLabel: parsed.data.gittensorLabel,
         blacklistLabel: parsed.data.blacklistLabel,
         createMissingLabel: parsed.data.createMissingLabel,
-        publicSurface: parsed.data.publicSurface,
-        includeMaintainerAuthors: parsed.data.includeMaintainerAuthors,
         requireLinkedIssue: parsed.data.requireLinkedIssue,
-        backfillEnabled: parsed.data.backfillEnabled,
         badgeEnabled: parsed.data.badgeEnabled,
         publicQualityMetrics: parsed.data.publicQualityMetrics,
         commandAuthorization: normalizeCommandAuthorizationPolicy(parsed.data.commandAuthorization).policy,
@@ -5085,6 +5061,28 @@ async function buildRepoOutcomePatternsResponse(env: Env, fullName: string) {
   return attachDataQuality(response as unknown as Record<string, unknown>, dataQuality);
 }
 
+// Batch A (loopover#6442): these 9 fields moved off the DB entirely -- rawSettings (getRepositorySettings)
+// always returns the same hardcoded default for them now, so a "DB vs yml" comparison built on rawSettings
+// alone would be comparing a constant against yml, never reflecting a repo's real .loopover.yml-driven
+// behavior. Overlays the true EFFECTIVE value for just these 9 fields onto an otherwise-raw-DB settings
+// object, preserving the #2912 DB-vs-yml comparison intent for every other (still DB-backed) field.
+const CONFIG_AS_CODE_ONLY_FIELDS = [
+  "commentMode",
+  "publicAudienceMode",
+  "publicSignalLevel",
+  "checkRunMode",
+  "checkRunDetailLevel",
+  "regateSweepOrderMode",
+  "publicSurface",
+  "includeMaintainerAuthors",
+  "backfillEnabled",
+] as const satisfies ReadonlyArray<keyof RepositorySettings>;
+function applyConfigAsCodeOnlyFields(rawSettings: RepositorySettings, resolvedSettings: RepositorySettings): RepositorySettings {
+  const settings = { ...rawSettings };
+  for (const field of CONFIG_AS_CODE_ONLY_FIELDS) (settings[field] as unknown) = resolvedSettings[field];
+  return settings;
+}
+
 export async function buildRegistrationReadinessResponse(env: Env, fullName: string) {
   /* v8 ignore start -- Registration readiness route-level shaping over covered signal helpers. */
   // Intentionally the raw DB `settings` alongside the raw (cache-only, never live-fetched) `focusManifest`,
@@ -5092,12 +5090,17 @@ export async function buildRegistrationReadinessResponse(env: Env, fullName: str
   // relationship between the two config layers (e.g. "your yml sets X but the currently active settings say
   // Y"), which requires seeing them unmerged (#2912). See buildRegistrationReadiness's use of `focusManifest`
   // for the yml-compiled policy section, separate from `settings` for the currently-active-behavior section.
-  const [intelligence, settings, upstreamReports, focusManifest] = await Promise.all([
+  const [intelligence, rawSettings, upstreamReports, focusManifest] = await Promise.all([
     buildRepoIntelligenceResponse(env, fullName),
     getRepositorySettings(env, fullName),
     listUpstreamDriftReports(env, 20),
     loadRepoFocusManifest(env, fullName, { fetcher: async () => null }),
   ]);
+  // Batch A (loopover#6442): the 9 config-as-code-only fields no longer have an independent DB value to
+  // compare against yml (#2912's rationale doesn't apply to them anymore -- `rawSettings` would always show
+  // the same hardcoded default), so overlay the real EFFECTIVE value for those specific fields onto the raw
+  // DB settings used for everything else.
+  const settings = applyConfigAsCodeOnlyFields(rawSettings, resolveEffectiveSettings(rawSettings, focusManifest));
   const repo = intelligence.repo;
   const installation = await loadInstallationHealthSummary(env, repo);
   const report = buildRegistrationReadiness({
@@ -5149,8 +5152,13 @@ export async function buildGittensorConfigRecommendationResponse(env: Env, fullN
   // to ADD to .loopover.yml based on the repo's currently-active (dashboard/API-configured) behavior — using
   // the yml-merged view here would be comparing the recommendation against itself once a yml override exists
   // (#2912).
-  const intelligence = await buildRepoIntelligenceResponse(env, fullName);
-  const settings = await getRepositorySettings(env, fullName);
+  const [intelligence, rawSettings, resolvedSettings] = await Promise.all([
+    buildRepoIntelligenceResponse(env, fullName),
+    getRepositorySettings(env, fullName),
+    resolveRepositorySettings(env, fullName),
+  ]);
+  // Batch A (loopover#6442): see buildRegistrationReadinessResponse's identical comment above.
+  const settings = applyConfigAsCodeOnlyFields(rawSettings, resolvedSettings);
   const repo = intelligence.repo;
   const recommendation = buildGittensorConfigRecommendation({
     repoFullName: fullName,

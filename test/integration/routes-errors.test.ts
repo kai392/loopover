@@ -1095,7 +1095,7 @@ describe("api route guards and error branches", () => {
         await app.request("/v1/internal/repos/JSONbored/gittensory/settings", {
           method: "POST",
           headers: internalHeaders(env),
-          body: JSON.stringify({ commentMode: "bad" }),
+          body: JSON.stringify({ reviewCheckMode: "bad" }),
         }, env)
       ).status,
     ).toBe(400);
@@ -1184,16 +1184,15 @@ describe("api route guards and error branches", () => {
         method: "POST",
         headers: internalHeaders(env),
         body: JSON.stringify({
-          commentMode: "all_prs",
-          publicSignalLevel: "minimal",
-          checkRunDetailLevel: "standard",
-          backfillEnabled: false,
+          gatePack: "oss-anti-slop",
+          createMissingLabel: false,
+          badgeEnabled: true,
         }),
       },
       env,
     );
     expect(updated.status).toBe(200);
-    await expect(updated.json()).resolves.toMatchObject({ commentMode: "all_prs", checkRunDetailLevel: "standard", backfillEnabled: false });
+    await expect(updated.json()).resolves.toMatchObject({ gatePack: "oss-anti-slop", createMissingLabel: false, badgeEnabled: true });
   });
 
   it("exposes and clears self-tune overrides for operators, rejecting unauthorized callers (#6168)", async () => {

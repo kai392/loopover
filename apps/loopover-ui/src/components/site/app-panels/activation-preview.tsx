@@ -37,7 +37,6 @@ type ActivationPreviewResponse = {
 type ActivationResponse = {
   repoFullName: string;
   reviewCheckMode: string;
-  checkRunMode: string;
   linkedIssueGateMode: string;
   duplicatePrGateMode: string;
   qualityGateMode: string;

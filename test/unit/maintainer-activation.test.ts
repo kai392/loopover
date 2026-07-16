@@ -239,7 +239,6 @@ describe("recommendedAdvisoryActivationSettings", () => {
   it("enables the gate + deterministic rules in advisory (non-blocking) mode", () => {
     expect(recommendedAdvisoryActivationSettings()).toEqual({
       reviewCheckMode: "required",
-      checkRunMode: "enabled",
       linkedIssueGateMode: "advisory",
       duplicatePrGateMode: "advisory",
       qualityGateMode: "advisory",
