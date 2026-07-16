@@ -430,6 +430,11 @@ export async function upsertPullRequestFromGitHub(
       headShaObservedAt,
       lastSeenOpenAt,
       payloadJson: jsonString(payload),
+      // GitHub's own PR creation time (see PullRequestRecord.createdAt's doc comment, src/types.ts) --
+      // set ONLY here, on first insert, and deliberately absent from onConflictDoUpdate's `set` below so
+      // a resync never overwrites it. `?? undefined` falls through to the column's own $defaultFn when a
+      // sparse payload omits created_at, matching every other optional GitHub-sourced field's convention.
+      createdAt: pr.created_at ?? undefined,
       updatedAt: syncedAt,
     })
     .onConflictDoUpdate({
