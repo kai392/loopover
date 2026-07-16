@@ -1,6 +1,12 @@
 import { parse as parseYaml } from "yaml";
 
 import { DEFAULT_PORTFOLIO_CONVERGENCE_THRESHOLDS, type PortfolioConvergenceThresholds } from "./portfolio/non-convergence.js";
+import { AUTONOMY_LEVELS } from "./settings/autonomy.js";
+import type { AutonomyLevel } from "./types/manifest-deps-types.js";
+
+// Re-exported so the barrel can surface it from this module's own export block, alongside every other
+// AmsPolicySpec field type (AmsSubmissionMode/AmsSlopThreshold/AmsCapLimits) rather than from a second place.
+export type { AutonomyLevel };
 
 // AmsPolicySpec (#5132, Wave 3.5 follow-up). The type surface for `.loopover-ams.yml` -- the OPERATOR's own
 // execution-risk policy for their miner (AMS: the autonomous mining system this file's fields configure), as
@@ -51,6 +57,14 @@ export type AmsPolicySpec = {
   /** Per-iteration turn budget passed to the coding-agent driver (IterateLoopInput.maxTurnsPerIteration).
    *  Default: 6. */
   maxTurnsPerIteration: number;
+  /** How much autonomy the iterate loop has over its OWN self-directed pass -> handoff transition (#6559).
+   *
+   *  Default: "auto" -- deliberately NOT settings/autonomy.ts's own DEFAULT_AUTONOMY_LEVEL of "observe". That
+   *  default is right for the maintainer auto-maintain dial, which gates a capability with no prior acting
+   *  behavior. This field gates something that already happens unconditionally today (a clean self-review pass
+   *  hands off), so defaulting to "observe" would silently change behavior for every operator who leaves the
+   *  field unset. Inert until the consultation issue reads it. */
+  selfLoopAutonomy: AutonomyLevel;
 };
 
 /** The tolerant parser result for `.loopover-ams.yml`. Mirrors `ParsedMinerGoalSpec`'s present/warnings shape. */
@@ -71,6 +85,7 @@ export const DEFAULT_AMS_POLICY_SPEC: Readonly<AmsPolicySpec> = Object.freeze({
   convergenceThresholds: Object.freeze({ ...DEFAULT_PORTFOLIO_CONVERGENCE_THRESHOLDS }),
   maxIterations: 3,
   maxTurnsPerIteration: 6,
+  selfLoopAutonomy: "auto",
 });
 
 const MAX_AMS_POLICY_SPEC_BYTES = 8_192;
@@ -83,6 +98,7 @@ function cloneDefaultAmsPolicySpec(): AmsPolicySpec {
     convergenceThresholds: { ...DEFAULT_AMS_POLICY_SPEC.convergenceThresholds },
     maxIterations: DEFAULT_AMS_POLICY_SPEC.maxIterations,
     maxTurnsPerIteration: DEFAULT_AMS_POLICY_SPEC.maxTurnsPerIteration,
+    selfLoopAutonomy: DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy,
   };
 }
 
@@ -94,6 +110,17 @@ function normalizeSubmissionMode(value: unknown, fallback: AmsSubmissionMode, wa
   if (value === undefined || value === null) return fallback;
   if (value === "observe" || value === "enforce") return value;
   warnings.push(`AmsPolicySpec field "submissionMode" must be one of observe, enforce; falling back to "${fallback}".`);
+  return fallback;
+}
+
+function normalizeSelfLoopAutonomy(value: unknown, fallback: AutonomyLevel, warnings: string[]): AutonomyLevel {
+  if (value === undefined || value === null) return fallback;
+  // Validated against AUTONOMY_LEVELS rather than a literal list so this can't drift from the vocabulary the
+  // rest of the codebase resolves against.
+  if (typeof value === "string" && (AUTONOMY_LEVELS as readonly string[]).includes(value)) return value as AutonomyLevel;
+  warnings.push(
+    `AmsPolicySpec field "selfLoopAutonomy" must be one of ${AUTONOMY_LEVELS.join(", ")}; falling back to "${fallback}".`,
+  );
   return fallback;
 }
 
@@ -166,7 +193,8 @@ function hasConfiguredPolicyFields(spec: AmsPolicySpec): boolean {
     spec.convergenceThresholds.maxConsecutiveFailures !== DEFAULT_AMS_POLICY_SPEC.convergenceThresholds.maxConsecutiveFailures ||
     spec.convergenceThresholds.maxReenqueues !== DEFAULT_AMS_POLICY_SPEC.convergenceThresholds.maxReenqueues ||
     spec.maxIterations !== DEFAULT_AMS_POLICY_SPEC.maxIterations ||
-    spec.maxTurnsPerIteration !== DEFAULT_AMS_POLICY_SPEC.maxTurnsPerIteration
+    spec.maxTurnsPerIteration !== DEFAULT_AMS_POLICY_SPEC.maxTurnsPerIteration ||
+    spec.selfLoopAutonomy !== DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy
   );
 }
 
@@ -207,6 +235,11 @@ export function parseAmsPolicySpec(raw: unknown): ParsedAmsPolicySpec {
       record.maxTurnsPerIteration,
       "maxTurnsPerIteration",
       DEFAULT_AMS_POLICY_SPEC.maxTurnsPerIteration,
+      warnings,
+    ),
+    selfLoopAutonomy: normalizeSelfLoopAutonomy(
+      record.selfLoopAutonomy,
+      DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy,
       warnings,
     ),
   };

@@ -42,6 +42,7 @@ describe("AmsPolicySpec parser (#5132)", () => {
       convergenceThresholds: { maxConsecutiveFailures: 5, maxReenqueues: 2 },
       maxIterations: 5,
       maxTurnsPerIteration: 10,
+      selfLoopAutonomy: "observe",
     });
     expect(parsed.present).toBe(true);
     expect(parsed.spec).toEqual({
@@ -51,8 +52,73 @@ describe("AmsPolicySpec parser (#5132)", () => {
       convergenceThresholds: { maxConsecutiveFailures: 5, maxReenqueues: 2 },
       maxIterations: 5,
       maxTurnsPerIteration: 10,
+      selfLoopAutonomy: "observe",
     });
     expect(parsed.warnings).toEqual([]);
+  });
+
+  describe("selfLoopAutonomy (#6559)", () => {
+    it("defaults to auto when omitted -- NOT observe, which would change today's behavior", () => {
+      // The loop already hands off unconditionally on a clean pass, so an "observe" default would silently
+      // stop that for every operator who never set the field. This assertion is the guard on that decision.
+      expect(DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy).toBe("auto");
+      expect(parseAmsPolicySpec({}).spec.selfLoopAutonomy).toBe("auto");
+      expect(parseAmsPolicySpec({ maxIterations: 5 }).spec.selfLoopAutonomy).toBe("auto");
+    });
+
+    // A non-default sibling field rides along on purpose: with ONLY selfLoopAutonomy: "auto" the spec has no
+    // non-default field at all, so the parser's own "nothing recognized" warning fires and would drown out
+    // whether the level itself parsed cleanly. maxIterations keeps the spec present so this asserts one thing.
+    it.each(["observe", "auto_with_approval", "auto"])("accepts the valid level %s", (level) => {
+      const parsed = parseAmsPolicySpec({ selfLoopAutonomy: level, maxIterations: 5 });
+      expect(parsed.spec.selfLoopAutonomy).toBe(level);
+      expect(parsed.warnings).toEqual([]);
+    });
+
+    it("marks a non-default level as configured, so the file isn't dismissed as empty", () => {
+      // selfLoopAutonomy alone must be enough to make the spec present -- if hasConfiguredPolicyFields missed
+      // it, an operator whose only setting is this one would be told their file had nothing recognized in it.
+      const parsed = parseAmsPolicySpec({ selfLoopAutonomy: "observe" });
+      expect(parsed.present).toBe(true);
+      expect(parsed.warnings).toEqual([]);
+    });
+
+    it("REGRESSION: the default level does NOT count as configured", () => {
+      // The mirror of the case above: hasConfiguredPolicyFields' new clause must not false-positive on the
+      // default, or an empty file would suddenly report itself as present.
+      const parsed = parseAmsPolicySpec({ selfLoopAutonomy: "auto" });
+      expect(parsed.present).toBe(false);
+      expect(parsed.spec).toEqual(DEFAULT_AMS_POLICY_SPEC);
+    });
+
+    it("REGRESSION: a zero-field input still returns the full, unmodified default spec", () => {
+      const parsed = parseAmsPolicySpec({});
+      expect(parsed.present).toBe(false);
+      expect(parsed.spec).toEqual(DEFAULT_AMS_POLICY_SPEC);
+    });
+
+    it.each([
+      ["an unknown string", "yolo"],
+      ["a near-miss level", "auto-with-approval"],
+      ["a number", 3],
+      ["a boolean", true],
+      ["an object", { level: "auto" }],
+    ])("falls back to auto with a warning for %s", (_label, value) => {
+      const parsed = parseAmsPolicySpec({ selfLoopAutonomy: value, maxIterations: 5 });
+      expect(parsed.spec.selfLoopAutonomy).toBe("auto");
+      const warning = parsed.warnings.join(" ");
+      expect(warning).toMatch(/selfLoopAutonomy/);
+      // The warning must name the allowed values, or an operator can't tell what to type instead.
+      expect(warning).toMatch(/observe.*auto_with_approval.*auto/);
+    });
+
+    it("treats an explicit null as unset rather than invalid", () => {
+      // Same reason as above for the sibling field: null must produce NO warning of its own, which is only
+      // observable once the spec has something else configured.
+      const parsed = parseAmsPolicySpec({ selfLoopAutonomy: null, maxIterations: 5 });
+      expect(parsed.spec.selfLoopAutonomy).toBe("auto");
+      expect(parsed.warnings).toEqual([]);
+    });
   });
 
   it("maxIterations/maxTurnsPerIteration floor to whole counts, allow zero, and reject negative/non-numeric values", () => {

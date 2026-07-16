@@ -40,6 +40,7 @@ test("parseAmsPolicySpec: valid raw config normalizes every field and keeps non-
     convergenceThresholds: { maxConsecutiveFailures: 5, maxReenqueues: 2 },
     maxIterations: 5,
     maxTurnsPerIteration: 10,
+    selfLoopAutonomy: "observe",
   });
 
   assert.equal(parsed.present, true);
@@ -50,8 +51,45 @@ test("parseAmsPolicySpec: valid raw config normalizes every field and keeps non-
     convergenceThresholds: { maxConsecutiveFailures: 5, maxReenqueues: 2 },
     maxIterations: 5,
     maxTurnsPerIteration: 10,
+    selfLoopAutonomy: "observe",
   });
   assert.deepEqual(parsed.warnings, []);
+});
+
+test("parseAmsPolicySpec: selfLoopAutonomy defaults to auto when omitted (#6559)", () => {
+  // "auto" is today's implicit behavior -- a clean self-review pass already hands off unconditionally -- so
+  // this default is what keeps an unset field from silently changing an existing operator's loop.
+  assert.equal(DEFAULT_AMS_POLICY_SPEC.selfLoopAutonomy, "auto");
+  assert.equal(parseAmsPolicySpec({}).spec.selfLoopAutonomy, "auto");
+});
+
+test("parseAmsPolicySpec: selfLoopAutonomy accepts every valid level (#6559)", () => {
+  // maxIterations rides along so the spec has a non-default field: with only selfLoopAutonomy: "auto" nothing
+  // is configured, and the parser's own "nothing recognized" warning would mask the level's own parse.
+  for (const level of ["observe", "auto_with_approval", "auto"]) {
+    const parsed = parseAmsPolicySpec({ selfLoopAutonomy: level, maxIterations: 5 });
+    assert.equal(parsed.spec.selfLoopAutonomy, level);
+    assert.deepEqual(parsed.warnings, []);
+  }
+});
+
+test("parseAmsPolicySpec: a non-default selfLoopAutonomy alone marks the spec present (#6559)", () => {
+  const parsed = parseAmsPolicySpec({ selfLoopAutonomy: "observe" });
+  assert.equal(parsed.present, true);
+});
+
+test("parseAmsPolicySpec: the default selfLoopAutonomy does not count as configured (#6559)", () => {
+  const parsed = parseAmsPolicySpec({ selfLoopAutonomy: "auto" });
+  assert.equal(parsed.present, false);
+  assert.deepEqual(parsed.spec, DEFAULT_AMS_POLICY_SPEC);
+});
+
+test("parseAmsPolicySpec: an invalid selfLoopAutonomy falls back to auto with a warning (#6559)", () => {
+  for (const value of ["yolo", 3, true, { level: "auto" }]) {
+    const parsed = parseAmsPolicySpec({ selfLoopAutonomy: value, maxIterations: 5 });
+    assert.equal(parsed.spec.selfLoopAutonomy, "auto");
+    assert.match(parsed.warnings.join(" "), /selfLoopAutonomy/);
+  }
 });
 
 test("parseAmsPolicySpec: maxIterations/maxTurnsPerIteration floor to whole counts and reject negative/non-numeric values", () => {
