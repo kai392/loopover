@@ -402,6 +402,24 @@ services:
   # After `docker compose --profile ollama up -d`, pull a model:
   #   docker compose exec ollama ollama pull llama3.2
   # Then set AI_PROVIDER=ollama and OLLAMA_AI_BASE_URL=http://ollama:11434/v1 in .env.
+  #
+  # GPU hosts: request the device via a local override (gitignored), e.g. docker-compose.local-gpu.yml:
+  #   services:
+  #     ollama:
+  #       deploy:
+  #         resources:
+  #           reservations:
+  #             devices:
+  #               - driver: nvidia
+  #                 count: all
+  #                 capabilities: [gpu]
+  # A device reservation only takes effect on container CREATION -- `docker compose restart ollama` reuses
+  # the existing container's already-baked-in config and will NOT pick it up, even after adding the file to
+  # COMPOSE_FILE. Confirmed in production (#gittensory-4327): the override existed for days while the
+  # running container's `docker inspect --format '{{json .HostConfig.DeviceRequests}}'` stayed `null`, and
+  # `ollama ps` kept reporting 100% CPU. Use `docker compose up -d --force-recreate ollama` (or any change
+  # that forces a recreate) after adding or editing a device reservation, then re-check `ollama ps` for
+  # "100% GPU" and/or `docker inspect`'s DeviceRequests to confirm it actually took.
   ollama:
     image: ollama/ollama:0.30.10
     restart: unless-stopped
