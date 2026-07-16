@@ -6,7 +6,7 @@ _Formerly Gittensory._
   <a href="https://github.com/JSONbored/loopover/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/JSONbored/loopover/actions/workflows/ci.yml/badge.svg" /></a>
   <a href="https://www.npmjs.com/package/@loopover/mcp"><img alt="MCP package" src="https://img.shields.io/npm/v/@loopover/mcp?label=mcp" /></a>
   <a href="https://github.com/JSONbored/loopover/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/JSONbored/loopover" /></a>
-  <a href="https://gittensory.aethereal.dev/docs"><img alt="Docs" src="https://img.shields.io/badge/docs-gittensory.aethereal.dev-0b6bcb" /></a>
+  <a href="https://loopover.ai/docs"><img alt="Docs" src="https://img.shields.io/badge/docs-loopover.ai-0b6bcb" /></a>
   <a href="https://gittensor.io/miners/repository?name=JSONbored/loopover"><img alt="Gittensor impact" src="https://api.gittensor.io/repos/JSONbored%2Floopover/badge.svg" /></a>
 </p>
 
@@ -27,7 +27,7 @@ LoopOver keeps sensitive context private by default.
 - Optional AI summaries receive compact deterministic signal bundles, not raw source code.
 - Maintainer packets and scoring context stay on protected API/MCP surfaces.
 
-See [Privacy and security](https://gittensory.aethereal.dev/docs/privacy-security) for the full boundary.
+See [Privacy and security](https://loopover.ai/docs/privacy-security) for the full boundary.
 
 ## Review Capabilities
 
@@ -46,29 +46,29 @@ LoopOver CI and LoopOver review score, gate, and comment on pull requests. The r
 - **`LoopOver Context`** (`settings.checkRunMode` / `settings.checkRunDetailLevel`, off by default) — a separate, purely advisory Check Run. At its default `checkRunDetailLevel: minimal` it publishes no findings at all; even at `standard`/`deep` it only re-renders content already shown elsewhere. Never make this one required.
 - **Inline review comments** (`LOOPOVER_REVIEW_INLINE_COMMENTS` + `.loopover.yml`'s `review.inline_comments`, off by both by default) — real, reply-able line-anchored PR review comment threads (CodeRabbit-style). This is the ONLY one of the three that posts an interactive per-line thread; the two check runs above never do. With `.loopover.yml`'s `review.suggestions` also on, a precise line-anchored fix is additionally rendered as a one-click, committable GitHub suggested-change block. With `review.finding_categories` also on (off by default), each finding is additionally tagged with a category — security/correctness/performance/maintainability/tests/style — in both the inline comment label and the unified comment's "Finding categories" collapsible; a deterministic path/keyword fallback covers whatever the model omits.
 
-See [Tuning your reviews](https://gittensory.aethereal.dev/docs/tuning) for the full flag, setting, and `.loopover.yml` reference.
+See [Tuning your reviews](https://loopover.ai/docs/tuning) for the full flag, setting, and `.loopover.yml` reference.
 
 ## Start Here
 
 | Audience                  | Start                                                                    | Useful next links                                                                                                                                                                                                 |
 | ------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Miners and contributors   | [Quickstart](https://gittensory.aethereal.dev/docs/quickstart)           | [MCP client setup](https://gittensory.aethereal.dev/docs/mcp-clients), [Miner workflow](https://gittensory.aethereal.dev/docs/miner-workflow), [Scoreability](https://gittensory.aethereal.dev/docs/scoreability) |
-| Maintainers               | [GitHub App](https://gittensory.aethereal.dev/docs/github-app)           | [Maintainer workflow](https://gittensory.aethereal.dev/docs/maintainer-workflow), [Self-host reviews](https://gittensory.aethereal.dev/docs/maintainer-self-hosting), [Privacy and security](https://gittensory.aethereal.dev/docs/privacy-security)                         |
-| Repo owners and operators | [Beta onboarding](https://gittensory.aethereal.dev/docs/beta-onboarding) | [Upstream drift](https://gittensory.aethereal.dev/docs/upstream-drift), [Troubleshooting](https://gittensory.aethereal.dev/docs/troubleshooting), [Roadmap](https://gittensory.aethereal.dev/roadmap)             |
-| Agent authors             | [Agents](https://gittensory.aethereal.dev/agents)                        | [API browser](https://gittensory.aethereal.dev/api), [MCP client setup](https://gittensory.aethereal.dev/docs/mcp-clients)                                                                                        |
+| Miners and contributors   | [Quickstart](https://loopover.ai/docs/quickstart)           | [MCP client setup](https://loopover.ai/docs/mcp-clients), [Miner workflow](https://loopover.ai/docs/miner-workflow), [Scoreability](https://loopover.ai/docs/scoreability) |
+| Maintainers               | [GitHub App](https://loopover.ai/docs/github-app)           | [Maintainer workflow](https://loopover.ai/docs/maintainer-workflow), [Self-host reviews](https://loopover.ai/docs/maintainer-self-hosting), [Privacy and security](https://loopover.ai/docs/privacy-security)                         |
+| Repo owners and operators | [Beta onboarding](https://loopover.ai/docs/beta-onboarding) | [Upstream drift](https://loopover.ai/docs/upstream-drift), [Troubleshooting](https://loopover.ai/docs/troubleshooting), [Roadmap](https://loopover.ai/roadmap)             |
+| Agent authors             | [Agents](https://loopover.ai/agents)                        | [API browser](https://loopover.ai/api), [MCP client setup](https://loopover.ai/docs/mcp-clients)                                                                                        |
 
 ## Surfaces
 
 | Surface           | Link                                                                                                                               |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Website           | [gittensory.aethereal.dev](https://gittensory.aethereal.dev/)                                                                      |
-| Docs              | [gittensory.aethereal.dev/docs](https://gittensory.aethereal.dev/docs)                                                             |
+| Website           | [loopover.ai](https://loopover.ai/)                                                                      |
+| Docs              | [loopover.ai/docs](https://loopover.ai/docs)                                                             |
 | MCP package       | [@loopover/mcp](https://www.npmjs.com/package/@loopover/mcp)                                               |
 | Engine package    | [`@loopover/engine`](packages/loopover-engine/README.md) — shared deterministic logic for the review stack and miner |
 | Miner package     | [`@loopover/miner`](packages/loopover-miner/README.md) — local foundation CLI for the autonomous miner runtime        |
-| API               | [API browser](https://gittensory.aethereal.dev/api) and [OpenAPI JSON](https://gittensory-api.aethereal.dev/openapi.json)          |
-| GitHub App        | [Setup docs](https://gittensory.aethereal.dev/docs/github-app) — self-hosting is the only currently available path |
-| Browser extension | [Extension page](https://gittensory.aethereal.dev/extension)                                                                       |
+| API               | [API browser](https://loopover.ai/api) and [OpenAPI JSON](https://api.loopover.ai/openapi.json)          |
+| GitHub App        | [Setup docs](https://loopover.ai/docs/github-app) — self-hosting is the only currently available path |
+| Browser extension | [Extension page](https://loopover.ai/extension)                                                                       |
 
 ## MCP Install
 
@@ -87,7 +87,7 @@ loopover-mcp init-client --print claude
 loopover-mcp init-client --print cursor
 ```
 
-For full editor setup and stdio configuration, use [MCP client setup](https://gittensory.aethereal.dev/docs/mcp-clients).
+For full editor setup and stdio configuration, use [MCP client setup](https://loopover.ai/docs/mcp-clients).
 
 Run base-agent commands:
 

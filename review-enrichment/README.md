@@ -2,7 +2,7 @@
 
 A standalone microservice that produces a structured **review brief** for the gittensory review engine. Run it
 in-network alongside a self-hosted engine via the repo-root `docker-compose --profile rees` service (the simplest
-path, no separate hosting to manage — see the [self-hosting REES docs](https://gittensory.aethereal.dev/docs/self-hosting-rees)),
+path, no separate hosting to manage — see the [self-hosting REES docs](https://loopover.ai/docs/self-hosting-rees)),
 or deploy it as its own service on any platform that can run a Dockerfile-based Node service — see
 [Deploy (Railway)](#deploy-railway) below for one example.
 
@@ -181,7 +181,7 @@ curl -XPOST localhost:8080/v1/enrich -H 'authorization: Bearer dev' \
 ## Deploy (Railway)
 
 For a self-hosted engine, `docker compose --profile rees up -d` from the repo root (see the
-[self-hosting REES docs](https://gittensory.aethereal.dev/docs/self-hosting-rees)) is the simplest path — no
+[self-hosting REES docs](https://loopover.ai/docs/self-hosting-rees)) is the simplest path — no
 separate service to host. If you'd rather run REES on its own outside that compose network, it's a plain
 Dockerfile-based Node service and can go anywhere that builds one; Railway is one option this repo has release
 tooling for (the Sentry/source-map wiring below). Point **Root Directory = `review-enrichment`** at a `railway.json`

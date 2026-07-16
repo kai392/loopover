@@ -2,7 +2,7 @@
 
 Native, orchestrator-managed secret storage for the self-host stack (`docker-compose.yml`'s
 top-level `secrets:` block), per the "Prefer secret files" guidance on
-[/docs/self-hosting-security](https://gittensory.aethereal.dev/docs/self-hosting-security).
+[/docs/self-hosting-security](https://loopover.ai/docs/self-hosting-security).
 
 ## Why
 

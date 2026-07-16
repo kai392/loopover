@@ -542,7 +542,7 @@ The release workflow's own "GitHub Release" step generates the notes body progra
 docker pull ghcr.io/jsonbored/loopover-selfhost:orb-v0.1.0
 \`\`\`
 
-Multi-arch (linux/amd64 + linux/arm64). See https://gittensory.aethereal.dev/docs/maintainer-self-hosting for setup.
+Multi-arch (linux/amd64 + linux/arm64). See https://loopover.ai/docs/maintainer-self-hosting for setup.
 Includes the Claude Code / Codex subscription CLIs by default; credentials stay runtime-only.
 Sentry release id baked into the image: \`loopover-orb@0.1.0\`.
 
@@ -582,9 +582,9 @@ The \`latest\` tag now points here.
 - \`.env\`, \`loopover-config/\`, and all data volumes (database, Redis, Qdrant, Grafana) — never
   overwritten by an update and never baked into the image.
 - GitHub App credentials or \`ORB_ENROLLMENT_SECRET\`, AI-provider credentials, and any \`SENTRY_DSN\`.
-- Resource limits and profile selection — see [Resource profiles](https://gittensory.aethereal.dev/docs/self-hosting-operations)
+- Resource limits and profile selection — see [Resource profiles](https://loopover.ai/docs/self-hosting-operations)
   for measured CPU/memory guidance per profile.
-- Backup and restore procedure — see [Backup and scaling](https://gittensory.aethereal.dev/docs/self-hosting-backup-scaling).
+- Backup and restore procedure — see [Backup and scaling](https://loopover.ai/docs/self-hosting-backup-scaling).
 
 Full changelog: compare against \`orb-v0.1.0-beta.2\`.`}
 />

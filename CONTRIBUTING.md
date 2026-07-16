@@ -249,9 +249,9 @@ Frontend:
 Cloudflare/deploy:
 
 - Production UI deploys through the `loopover-ui` Cloudflare Worker on
-  `https://gittensory.aethereal.dev/`.
+  `https://loopover.ai/`.
 - Production API deploys through the `loopover-api` Cloudflare Worker on
-  `https://gittensory-api.aethereal.dev/`.
+  `https://api.loopover.ai/`.
 - Cloudflare Workers Builds owns automatic deployments from GitHub for BOTH workers (one connection
   per worker, scoped by build-watch-paths). GitHub Actions are validation/fallback only — do not add
   deploy workflows.
