@@ -601,6 +601,7 @@ describe("api route guards and error branches", () => {
           queued.push(message);
         },
       } as unknown as Queue,
+      LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory",
     });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();

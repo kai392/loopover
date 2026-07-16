@@ -87,7 +87,12 @@ export function createTestEnv(overrides: Partial<Env> = {}): Env {
     GITTENSOR_UPSTREAM_REF: "test",
     GITTENSOR_REGISTRY_URL: "https://raw.githubusercontent.com/entrius/gittensor/test/gittensor/validator/weights/master_repositories.json",
     LOOPOVER_AUTO_FILE_DRIFT_ISSUES: "false",
-    LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory",
+    // Deliberately NOT "JSONbored/gittensory" (the old pre-rename repo name most test fixtures use as their
+    // generic placeholder repoFullName) and NOT "JSONbored/loopover" (the real self-repo default) -- either
+    // would make isLoopOverSelfRepo() accidentally match a fixture that has no intent to exercise self-repo
+    // manifest resolution, silently merging the bundled autonomy:{...auto} block into that test's settings.
+    // Tests that DO want self-repo matching set this explicitly to their own fixture's repo name.
+    LOOPOVER_DRIFT_ISSUE_REPO: "test-harness/no-self-repo-match",
     PUBLIC_API_ORIGIN: "https://api.loopover.ai",
     PUBLIC_SITE_ORIGIN: "https://loopover.ai",
     INTERNAL_JOB_TOKEN: "dev-internal-token",

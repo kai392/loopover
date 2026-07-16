@@ -5862,7 +5862,7 @@ describe("queue processors", () => {
   });
 
   it("ops-alerts job runs the scan when a present ops manifest override turns it ON even though LOOPOVER_REVIEW_OPS is OFF (#6275)", async () => {
-    const env = createTestEnv(); // flag unset → OFF
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory" }); // flag unset → OFF
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: true } });
     await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, ?, ?, 1, 1)")
       .bind("owner/repo", "owner", "repo")

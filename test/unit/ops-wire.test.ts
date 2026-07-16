@@ -73,21 +73,21 @@ describe("resolveOpsManifestOverride — config-as-code lookup (#6275)", () => {
   });
 
   it("returns the self-repo's configured ops block when present", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
 
     expect(await resolveOpsManifestOverride(env)).toEqual({ present: true, enabled: true });
   });
 
   it("returns present: false when the self-repo has no ops block configured", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
 
     expect(await resolveOpsManifestOverride(env)).toEqual({ present: false, enabled: false });
   });
 
   it("degrades to present: false (never throws) when the manifest load itself fails", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     // loadRepoFocusManifest reads signal_snapshots (the persisted-record cache) before any live fetch fallback.
     const realPrepare = env.DB.prepare.bind(env.DB);
     env.DB.prepare = ((sql: string) => {
@@ -105,7 +105,7 @@ describe("resolveOpsManifestOverride — config-as-code lookup (#6275)", () => {
   });
 
   it("within the 60s TTL, reuses the cached override instead of re-reading the manifest (#6372 perf)", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
     const t0 = Date.parse("2026-07-16T00:00:00Z");
     expect(await resolveOpsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
@@ -118,7 +118,7 @@ describe("resolveOpsManifestOverride — config-as-code lookup (#6275)", () => {
   });
 
   it("re-reads the manifest once the 60s TTL has elapsed", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
     const t0 = Date.parse("2026-07-16T00:00:00Z");
     expect(await resolveOpsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
@@ -717,7 +717,7 @@ describe("GET /v1/internal/ops/stats — bearer-gated, flag-gated endpoint", () 
 
   it("a present ops manifest override turns the endpoint ON even when LOOPOVER_REVIEW_OPS is OFF (#6275)", async () => {
     const app = createApp();
-    const env = createTestEnv(); // flag unset → OFF
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO }); // flag unset → OFF
     await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
     const res = await app.request("/v1/internal/ops/stats", { headers: bearer(env) }, env);
     expect(res.status).toBe(200);
@@ -725,7 +725,7 @@ describe("GET /v1/internal/ops/stats — bearer-gated, flag-gated endpoint", () 
 
   it("a present ops manifest override turns the endpoint OFF even when LOOPOVER_REVIEW_OPS is ON (#6275)", async () => {
     const app = createApp();
-    const env = createTestEnv({ LOOPOVER_REVIEW_OPS: "true" });
+    const env = createTestEnv({ LOOPOVER_REVIEW_OPS: "true", LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: false } });
     const res = await app.request("/v1/internal/ops/stats", { headers: bearer(env) }, env);
     expect(res.status).toBe(404);

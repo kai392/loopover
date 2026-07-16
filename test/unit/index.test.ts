@@ -771,6 +771,7 @@ describe("worker entrypoint", () => {
           sent.push(message);
         },
       } as unknown as Queue,
+      LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory",
     });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: true } });
     const waitUntil: Promise<unknown>[] = [];
@@ -788,6 +789,7 @@ describe("worker entrypoint", () => {
           sent.push(message);
         },
       } as unknown as Queue,
+      LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory",
     });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: false } });
     const waitUntil: Promise<unknown>[] = [];

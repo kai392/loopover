@@ -56,14 +56,14 @@ describe("GET /v1/public/stats (#1059)", () => {
   });
 
   it("a present publicStats manifest override turns the endpoint ON even when LOOPOVER_PUBLIC_STATS is OFF (#6275)", async () => {
-    const env = createTestEnv(); // flag unset → OFF
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory" }); // flag unset → OFF
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { publicStats: { enabled: true } });
     const res = await createApp().request("/v1/public/stats", {}, env);
     expect(res.status).toBe(200);
   });
 
   it("a present publicStats manifest override turns the endpoint OFF even when LOOPOVER_PUBLIC_STATS is ON (#6275)", async () => {
-    const env = createTestEnv({ LOOPOVER_PUBLIC_STATS: "1" });
+    const env = createTestEnv({ LOOPOVER_PUBLIC_STATS: "1", LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory" });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { publicStats: { enabled: false } });
     const res = await createApp().request("/v1/public/stats", {}, env);
     expect(res.status).toBe(404);

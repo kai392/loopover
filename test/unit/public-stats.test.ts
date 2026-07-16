@@ -86,14 +86,14 @@ describe("resolvePublicStatsManifestOverride — config-as-code lookup (#6275)",
   });
 
   it("returns the self-repo's configured publicStats block when present", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: true } });
 
     expect(await resolvePublicStatsManifestOverride(env)).toEqual({ present: true, enabled: true });
   });
 
   it("returns present: false when the self-repo has no publicStats block configured", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
 
     expect(await resolvePublicStatsManifestOverride(env)).toEqual({ present: false, enabled: false });
@@ -117,7 +117,7 @@ describe("resolvePublicStatsManifestOverride — config-as-code lookup (#6275)",
   });
 
   it("within the 60s TTL, reuses the cached override instead of re-reading the manifest (#6372 perf)", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: true } });
     const t0 = Date.parse("2026-07-16T00:00:00Z");
     expect(await resolvePublicStatsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
@@ -130,7 +130,7 @@ describe("resolvePublicStatsManifestOverride — config-as-code lookup (#6275)",
   });
 
   it("re-reads the manifest once the 60s TTL has elapsed", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: true } });
     const t0 = Date.parse("2026-07-16T00:00:00Z");
     expect(await resolvePublicStatsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });

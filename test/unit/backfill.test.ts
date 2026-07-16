@@ -1182,6 +1182,11 @@ describe("GitHub backfill", () => {
       autoLabelEnabled: false,
       checkRunMode: "off",
     });
+    // Without this, the manifest resolver's live (unmocked) GitHub fetch for "JSONbored/gittensory"'s
+    // .loopover.yml actually succeeds -- GitHub's repo-rename redirect resolves it to this same repo's
+    // CURRENT .loopover.yml, which now grants full agent autonomy -- silently upgrading the required
+    // permissions this test asserts are absent. Force the fetch to a deterministic 404 instead.
+    vi.stubGlobal("fetch", async () => new Response("Not Found", { status: 404 }));
 
     const repair = await buildInstallationRepairDiagnostics(env, {
       installationId: 123,
@@ -1248,6 +1253,10 @@ describe("GitHub backfill", () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
     await upsertRepositorySettings(env, { repoFullName: "JSONbored/gittensory", autonomy: { merge: "auto" } });
+    // Force a deterministic 404 -- otherwise the manifest resolver's live fetch for "JSONbored/gittensory"'s
+    // .loopover.yml succeeds via GitHub's repo-rename redirect and returns the CURRENT (broader) autonomy
+    // grant, which would upgrade requiredPermissions.pull_requests beyond what this test is isolating.
+    vi.stubGlobal("fetch", async () => new Response("Not Found", { status: 404 }));
 
     const repair = await buildInstallationRepairDiagnostics(env, {
       installationId: 123,

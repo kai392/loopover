@@ -71,14 +71,14 @@ describe("resolveDraftFlowManifestOverride — config-as-code lookup (#6275)", (
   const SELF_REPO = "JSONbored/gittensory";
 
   it("returns the self-repo's configured draftFlow block when present", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { draftFlow: { enabled: true } });
 
     expect(await resolveDraftFlowManifestOverride(env)).toEqual({ present: true, enabled: true });
   });
 
   it("returns present: false when the self-repo has no draftFlow block configured", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
 
     expect(await resolveDraftFlowManifestOverride(env)).toEqual({ present: false, enabled: false });
@@ -147,7 +147,7 @@ describe("draft flow — config-as-code override end-to-end (#6275)", () => {
   const SELF_REPO = "JSONbored/gittensory";
 
   it("handleDraftCreate: a present draftFlow override enables the flow even when the env var is off", async () => {
-    const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "Iv-test-client-id", GITHUB_OAUTH_CLIENT_SECRET: "test-oauth-client-secret", DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET });
+    const env = createTestEnv({ GITHUB_OAUTH_CLIENT_ID: "Iv-test-client-id", GITHUB_OAUTH_CLIENT_SECRET: "test-oauth-client-secret", DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET, LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { draftFlow: { enabled: true } });
 
     const res = await handleDraftCreate(new Request(`${ORIGIN}/v1/drafts`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(SAMPLE_FIELDS) }), env);
@@ -156,7 +156,7 @@ describe("draft flow — config-as-code override end-to-end (#6275)", () => {
   });
 
   it("handleDraftCreate: a present draftFlow override disables the flow even when the env var is on", async () => {
-    const env = draftEnv();
+    const env = draftEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { draftFlow: { enabled: false } });
 
     const res = await handleDraftCreate(new Request(`${ORIGIN}/v1/drafts`, { method: "POST", headers: jsonHeaders(), body: JSON.stringify(SAMPLE_FIELDS) }), env);
@@ -165,7 +165,7 @@ describe("draft flow — config-as-code override end-to-end (#6275)", () => {
   });
 
   it("processSubmitDraft: a present draftFlow override enables submission even when the env var is off", async () => {
-    const env = createTestEnv({ DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET });
+    const env = createTestEnv({ DRAFT_TOKEN_ENCRYPTION_SECRET: DRAFT_SECRET, LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { draftFlow: { enabled: true } });
     const id = await seedQueuedDraftWithToken(env);
     // A deterministic GitHub 500 (not a real network call) is enough to prove the guard did NOT fire: a fresh,
@@ -180,7 +180,7 @@ describe("draft flow — config-as-code override end-to-end (#6275)", () => {
   });
 
   it("processSubmitDraft: a present draftFlow override disables submission even when the env var is on (no-op, draft stays queued)", async () => {
-    const env = draftEnv();
+    const env = draftEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { draftFlow: { enabled: false } });
     const id = await seedQueuedDraftWithToken(env);
 

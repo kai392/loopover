@@ -686,7 +686,7 @@ describe("queue processors", () => {
   });
 
   it("dispatch-level gate: resolves the upstreamDriftIssues manifest override and threads it into fileUpstreamDriftIssues (#6275)", async () => {
-    const env = createTestEnv(); // LOOPOVER_AUTO_FILE_DRIFT_ISSUES defaults to "false"
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory" }); // LOOPOVER_AUTO_FILE_DRIFT_ISSUES defaults to "false"
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { upstreamDriftIssues: { enabled: true } });
     const spy = vi.spyOn(rulesetModule, "fileUpstreamDriftIssues").mockResolvedValue({ status: "completed", created: 0, updated: 0, skipped: 0 });
 
@@ -697,7 +697,7 @@ describe("queue processors", () => {
   });
 
   it("dispatch-level gate: skips fileUpstreamDriftIssues entirely when a present override disables it (env var otherwise on)", async () => {
-    const env = createTestEnv({ LOOPOVER_AUTO_FILE_DRIFT_ISSUES: "true" });
+    const env = createTestEnv({ LOOPOVER_AUTO_FILE_DRIFT_ISSUES: "true", LOOPOVER_DRIFT_ISSUE_REPO: "JSONbored/gittensory" });
     await upsertRepoFocusManifest(env, "JSONbored/gittensory", { upstreamDriftIssues: { enabled: false } });
     const spy = vi.spyOn(rulesetModule, "fileUpstreamDriftIssues");
 

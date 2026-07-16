@@ -141,14 +141,14 @@ describe("shouldFireMaintainerRecap — cadence gate (#2248)", () => {
 
 describe("resolveMaintainerRecapManifestOverride — config-as-code lookup (#2250)", () => {
   it("returns the self-repo's configured maintainerRecap block when present", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { maintainerRecap: { enabled: true, cadence: "daily", channel: "discord" } });
 
     expect(await resolveMaintainerRecapManifestOverride(env)).toEqual({ present: true, enabled: true, cadence: "daily" });
   });
 
   it("returns present: false when the self-repo has no maintainerRecap block configured", async () => {
-    const env = createTestEnv();
+    const env = createTestEnv({ LOOPOVER_DRIFT_ISSUE_REPO: SELF_REPO });
     await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
 
     expect(await resolveMaintainerRecapManifestOverride(env)).toEqual({ present: false, enabled: false, cadence: "weekly" });

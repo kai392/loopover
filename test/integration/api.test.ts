@@ -2160,6 +2160,10 @@ describe("api routes", () => {
       repositories: [repoPayload],
     });
     await upsertRepositoryFromGitHub(env, repoPayload, 777);
+    // Force a deterministic 404 -- otherwise the manifest resolver's live fetch for "JSONbored/gittensory"'s
+    // .loopover.yml succeeds via GitHub's repo-rename redirect and returns the CURRENT (broader) autonomy
+    // grant, which would upgrade requiredPermissions beyond what this test asserts.
+    vi.stubGlobal("fetch", async () => new Response("Not Found", { status: 404 }));
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/gittensory",
       commentMode: "all_prs",
