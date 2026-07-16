@@ -2052,6 +2052,16 @@ describe("per-contributor open-item cap short-circuit (#2270)", () => {
     expect(plan[1]).toMatchObject({ actionClass: "label", label: DEFAULT_CONTRIBUTOR_CAP_LABEL, labelOp: "add", closeKind: "contributor_cap" });
   });
 
+  it("pins the contributor_cap close to the reviewed head, mirroring blacklist/review_nag/copycat/screenshot_table (regression: was previously unpinned, which made decidePendingAgentAction reject every auto_with_approval accept via isUnpinnedRatifyingAction)", () => {
+    const plan = planAgentMaintenanceActions(overCap({ pr: { labels: [], headSha: "h-reviewed" } }));
+    expect(plan.find((a) => a.actionClass === "close")).toMatchObject({ closeKind: "contributor_cap", expectedHeadSha: "h-reviewed" });
+  });
+
+  it("omits expectedHeadSha on the contributor_cap close when the PR record has no headSha (defensive fallback)", () => {
+    const plan = planAgentMaintenanceActions(overCap());
+    expect(plan.find((a) => a.actionClass === "close")?.expectedHeadSha).toBeUndefined();
+  });
+
   it("interpolates the (public) login/count/cap into the close comment — unlike blacklist's static-only comment", () => {
     const plan = planAgentMaintenanceActions(overCap());
     expect(plan[0]?.closeComment).toContain("@farmer99");

@@ -751,6 +751,10 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         closeReasons: ["over the per-contributor open-item cap"],
         closeComment: sanitizePublicComment(contributorCapCloseMessage(authorLogin, openCount, cap, itemKind, scope)),
         closeKind: "contributor_cap",
+        // Pin like blacklist/review_nag/copycat/screenshot_table above (#2452): without this an auto_with_approval
+        // stage persists params.expectedHeadSha as undefined, so decidePendingAgentAction's isUnpinnedRatifyingAction
+        // guard unconditionally rejects the maintainer's accept before the close ever executes.
+        ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
       });
     }
     if (acting("close") && label !== null) actions.push({ actionClass: "label", autonomyClass: "close", closeKind: "contributor_cap", requiresApproval: approval("close"), reason: "over the per-contributor open-item cap", label, labelOp: "add" });
