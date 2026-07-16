@@ -34,7 +34,7 @@ describe("resolveGitHubToken (#6116)", () => {
       return Response.json({ token: "live-token" });
     });
     await expect(resolveGitHubToken(configuredEnv(dir))).resolves.toBe("live-token");
-    expect(capturedUrl).toBe("https://gittensory-api.aethereal.dev/v1/auth/github/token");
+    expect(capturedUrl).toBe("https://api.loopover.ai/v1/auth/github/token");
   });
 
   it("an explicit GITHUB_TOKEN env override wins outright, no filesystem or network access", async () => {
@@ -130,7 +130,7 @@ describe("resolveGitHubToken (#6116)", () => {
       return Response.json({ token: "live-token" });
     };
     await resolveGitHubToken(configuredEnv(dir), { fetchImpl });
-    expect(capturedUrl).toBe("https://gittensory-api.aethereal.dev/v1/auth/github/token");
+    expect(capturedUrl).toBe("https://api.loopover.ai/v1/auth/github/token");
   });
 
   it("treats a legacy default API URL stored in the profile as absent, falling through to the current default", async () => {
@@ -142,7 +142,19 @@ describe("resolveGitHubToken (#6116)", () => {
       return Response.json({ token: "live-token" });
     };
     await resolveGitHubToken(configuredEnv(dir), { fetchImpl });
-    expect(capturedUrl).toBe("https://gittensory-api.aethereal.dev/v1/auth/github/token");
+    expect(capturedUrl).toBe("https://api.loopover.ai/v1/auth/github/token");
+  });
+
+  it("treats the retired gittensory-api.aethereal.dev default as legacy too, falling through to the current default", async () => {
+    dir = mkdtempSync(join(tmpdir(), "loopover-miner-github-token-legacy-aethereal-url-"));
+    writeConfig(dir, { profiles: { default: { apiUrl: "https://gittensory-api.aethereal.dev", session: { token: "session-token" } } } });
+    let capturedUrl: string | undefined;
+    const fetchImpl = async (url: string) => {
+      capturedUrl = url;
+      return Response.json({ token: "live-token" });
+    };
+    await resolveGitHubToken(configuredEnv(dir), { fetchImpl });
+    expect(capturedUrl).toBe("https://api.loopover.ai/v1/auth/github/token");
   });
 
   it("returns null (not throw) when the fetch itself rejects", async () => {

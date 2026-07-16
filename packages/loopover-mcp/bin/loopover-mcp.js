@@ -18,8 +18,11 @@ import { redactKnownLocalPaths, redactLocalPath } from "../lib/redact-local-path
 // literals, so a release bump never has a second place to forget.
 const ownPackageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 
-const defaultApiUrl = "https://gittensory-api.aethereal.dev";
-const legacyDefaultApiUrls = new Set(["https://gittensory-api.zeronode.workers.dev"]);
+const defaultApiUrl = "https://api.loopover.ai";
+const legacyDefaultApiUrls = new Set([
+  "https://gittensory-api.zeronode.workers.dev",
+  "https://gittensory-api.aethereal.dev",
+]);
 const packageName = ownPackageJson.name;
 const packageVersion = ownPackageJson.version;
 const npmRegistryUrl = (process.env.LOOPOVER_NPM_REGISTRY_URL ?? "https://registry.npmjs.org").replace(/\/+$/, "");

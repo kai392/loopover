@@ -75,16 +75,16 @@ describe("api routes", () => {
     const app = createApp();
     const env = createTestEnv();
 
-    const preflight = await app.request("/v1/repos", { method: "OPTIONS", headers: { origin: "https://gittensory.aethereal.dev" } }, env);
+    const preflight = await app.request("/v1/repos", { method: "OPTIONS", headers: { origin: "https://loopover.ai" } }, env);
     expect(preflight.status).toBe(204);
-    expect(preflight.headers.get("access-control-allow-origin")).toBe("https://gittensory.aethereal.dev");
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("https://loopover.ai");
     expect(preflight.headers.get("access-control-allow-methods")).toBe("GET, POST, PUT, DELETE, OPTIONS");
 
-    const aiReviewPreflight = await app.request("/v1/repos/acme/widgets/ai-review", { method: "OPTIONS", headers: { origin: "https://gittensory.aethereal.dev", "access-control-request-method": "PUT" } }, env);
+    const aiReviewPreflight = await app.request("/v1/repos/acme/widgets/ai-review", { method: "OPTIONS", headers: { origin: "https://loopover.ai", "access-control-request-method": "PUT" } }, env);
     expect(aiReviewPreflight.status).toBe(204);
     expect(aiReviewPreflight.headers.get("access-control-allow-methods")).toContain("PUT");
 
-    const aiKeyDeletePreflight = await app.request("/v1/repos/acme/widgets/ai-key", { method: "OPTIONS", headers: { origin: "https://gittensory.aethereal.dev", "access-control-request-method": "DELETE" } }, env);
+    const aiKeyDeletePreflight = await app.request("/v1/repos/acme/widgets/ai-key", { method: "OPTIONS", headers: { origin: "https://loopover.ai", "access-control-request-method": "DELETE" } }, env);
     expect(aiKeyDeletePreflight.status).toBe(204);
     expect(aiKeyDeletePreflight.headers.get("access-control-allow-methods")).toContain("DELETE");
 
@@ -147,9 +147,9 @@ describe("api routes", () => {
       return Response.json({ full_name: "JSONbored/gittensory", html_url: "https://github.com/JSONbored/gittensory", stargazers_count: 12, forks_count: 3 });
     });
 
-    const response = await app.request("/v1/public/github/repos/JSONbored/gittensory/stats", { headers: { origin: "https://gittensory.aethereal.dev" } }, env);
+    const response = await app.request("/v1/public/github/repos/JSONbored/gittensory/stats", { headers: { origin: "https://loopover.ai" } }, env);
     expect(response.status).toBe(200);
-    expect(response.headers.get("access-control-allow-origin")).toBe("https://gittensory.aethereal.dev");
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://loopover.ai");
     expect(response.headers.get("cache-control")).toContain("max-age=600");
     await expect(response.json()).resolves.toMatchObject({
       repoFullName: "JSONbored/gittensory",

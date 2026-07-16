@@ -419,21 +419,21 @@ describe("api route guards and error branches", () => {
       "/v1/repos",
       {
         method: "OPTIONS",
-        headers: { origin: "https://gittensory-api.aethereal.dev", "access-control-request-method": "GET" },
+        headers: { origin: "https://api.loopover.ai", "access-control-request-method": "GET" },
       },
       env,
     );
-    expect(allowedPreflight.headers.get("access-control-allow-origin")).toBe("https://gittensory-api.aethereal.dev");
+    expect(allowedPreflight.headers.get("access-control-allow-origin")).toBe("https://api.loopover.ai");
 
     const frontendPreflight = await app.request(
       "/v1/repos",
       {
         method: "OPTIONS",
-        headers: { origin: "https://gittensory.aethereal.dev", "access-control-request-method": "GET" },
+        headers: { origin: "https://loopover.ai", "access-control-request-method": "GET" },
       },
       env,
     );
-    expect(frontendPreflight.headers.get("access-control-allow-origin")).toBe("https://gittensory.aethereal.dev");
+    expect(frontendPreflight.headers.get("access-control-allow-origin")).toBe("https://loopover.ai");
 
     const customOriginEnv = createTestEnv({
       PUBLIC_API_ORIGIN: "not a url",

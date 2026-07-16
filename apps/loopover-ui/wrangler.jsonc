@@ -23,11 +23,7 @@
     "VITE_LOOPOVER_API_ORIGIN": "https://api.loopover.ai",
   },
   "routes": [
-    {
-      "pattern": "gittensory.aethereal.dev",
-      "custom_domain": true,
-    },
-    // LoopOver rebrand (issue #4762, Step 1): live side-by-side with the domain above, not a replacement yet.
+    // LoopOver rebrand (issue #4762): full cutover, loopover.ai only.
     {
       "pattern": "loopover.ai",
       "custom_domain": true,

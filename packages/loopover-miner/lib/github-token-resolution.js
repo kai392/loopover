@@ -13,8 +13,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-const DEFAULT_API_URL = "https://gittensory-api.aethereal.dev";
-const LEGACY_DEFAULT_API_URLS = new Set(["https://gittensory-api.zeronode.workers.dev"]);
+const DEFAULT_API_URL = "https://api.loopover.ai";
+const LEGACY_DEFAULT_API_URLS = new Set([
+  "https://gittensory-api.zeronode.workers.dev",
+  "https://gittensory-api.aethereal.dev",
+]);
 const DEFAULT_PROFILE_NAME = "default";
 const GITHUB_TOKEN_FETCH_TIMEOUT_MS = 10_000;
 

@@ -248,7 +248,7 @@ describe("loopover-mcp CLI — basics", () => {
       sourceUpload: { default: boolean; enabled: boolean; source: string; supported: boolean };
     };
     // The run() harness sets LOOPOVER_CONFIG_DIR but no API URL or token.
-    expect(payload.apiUrl).toBe("https://gittensory-api.aethereal.dev");
+    expect(payload.apiUrl).toBe("https://api.loopover.ai");
     expect(payload.apiUrlSource).toBe("default");
     expect(payload.activeProfile).toBe("default");
     expect(payload.profileCount).toBeGreaterThanOrEqual(1);

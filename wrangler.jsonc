@@ -38,20 +38,16 @@
     "SCORING_TIME_DECAY_ENABLED": "true",
     "LOOPOVER_AUTO_FILE_DRIFT_ISSUES": "false",
     "LOOPOVER_DRIFT_ISSUE_REPO": "JSONbored/gittensory",
-    // LoopOver rebrand (issue #4765, domain flip): loopover.ai is now the canonical site origin. The old
-    // gittensory.aethereal.dev domain stays live (still resolves, still valid as a post-OAuth-login redirect
-    // target via PUBLIC_SITE_ORIGIN_ALIASES below) -- no redirect rule, no sunset date, both domains keep
-    // working side by side; only which one this instance treats as canonical has flipped.
-    //
-    // PUBLIC_API_ORIGIN flipped here too (previously deferred): it builds this Worker's own GitHub OAuth
-    // redirect_uri (githubOAuthCallbackUrl, src/auth/github-oauth.ts). The classic OAuth App behind
-    // GITHUB_OAUTH_CLIENT_ID only supports ONE registered callback URL (unlike a GitHub App's up-to-10), so
-    // this had to be a hard cutover in lockstep with updating that OAuth App's callback URL to
-    // https://api.loopover.ai/v1/auth/github/callback on GitHub's side -- no dual-domain transition window
-    // was possible for this one value the way PUBLIC_SITE_ORIGIN got above.
+    // LoopOver rebrand (issue #4765): full cutover, loopover.ai only. gittensory.aethereal.dev is retired
+    // as a production origin -- no longer routed to this Worker (see routes[] below) and no longer accepted
+    // as a PUBLIC_SITE_ORIGIN_ALIASES redirect target. normalizeReturnTo (src/auth/github-oauth.ts) already
+    // treats an unset PUBLIC_SITE_ORIGIN_ALIASES as "no aliases" with zero code changes needed -- the
+    // aliasing mechanism itself stays in the codebase as a generic self-host feature, production just no
+    // longer configures it. PUBLIC_API_ORIGIN builds this Worker's own GitHub OAuth redirect_uri
+    // (githubOAuthCallbackUrl); that OAuth App's callback URL on GitHub's side is already
+    // https://api.loopover.ai/v1/auth/github/callback.
     "PUBLIC_API_ORIGIN": "https://api.loopover.ai",
     "PUBLIC_SITE_ORIGIN": "https://loopover.ai",
-    "PUBLIC_SITE_ORIGIN_ALIASES": "https://gittensory.aethereal.dev",
     "ADMIN_GITHUB_LOGINS": "JSONbored",
     // Hosted reviews are retired. Cloudflare now serves the public API + Orb broker only; review execution runs
     // in the self-host container, where Redis-backed transient state is mandatory. The Cloudflare API worker no
@@ -233,11 +229,7 @@
     "LOOPOVER_SKIP_AUTOMATION_BOT_PRS": "true",
   },
   "routes": [
-    {
-      "pattern": "gittensory-api.aethereal.dev",
-      "custom_domain": true,
-    },
-    // LoopOver rebrand (issue #4762, Step 1): live side-by-side with the domain above, not a replacement yet.
+    // LoopOver rebrand (issue #4762): full cutover, api.loopover.ai only.
     {
       "pattern": "api.loopover.ai",
       "custom_domain": true,
