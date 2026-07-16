@@ -525,6 +525,7 @@ export {
   type AmsPolicySpec,
   type AmsSlopThreshold,
   type AmsSubmissionMode,
+  type AutonomyLevel,
   type ParsedAmsPolicySpec,
 } from "./ams-policy-spec.js";
 export {
