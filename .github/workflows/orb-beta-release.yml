@@ -81,7 +81,7 @@ jobs:
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$TAG" -m "gittensory-orb ${VERSION}"
+            git tag -a "$TAG" -m "loopover-orb ${VERSION}"
             git remote set-url origin "https://github.com/${GITHUB_REPOSITORY}.git"
             gh auth setup-git
             git push origin "$TAG"

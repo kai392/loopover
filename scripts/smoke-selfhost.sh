@@ -5,22 +5,22 @@
 # (or must not) produce. See docs/self-hosting-release-checklist for the beta smoke matrix built on this.
 #
 # Defaults to a plain SQLite + Redis + direct-App boot:
-#   ./scripts/smoke-selfhost.sh gittensory:selfhost-ci
+#   ./scripts/smoke-selfhost.sh loopover-selfhost:ci
 #
 # Test a specific mode by passing extra env and the events it should produce:
 #   SELFHOST_SMOKE_EXTRA_ENV="AI_PROVIDER=claude-code
 #   CLAUDE_CODE_OAUTH_TOKEN=..." \
 #   SELFHOST_SMOKE_EXPECT_EVENTS="selfhost_ai_provider" \
-#   ./scripts/smoke-selfhost.sh gittensory:selfhost-ci
+#   ./scripts/smoke-selfhost.sh loopover-selfhost:ci
 #
 # Assert an event must NOT appear (e.g. no AI-CLI-missing warning, no failed relay registration):
-#   SELFHOST_SMOKE_FORBID_EVENTS="selfhost_ai_cli_missing" ./scripts/smoke-selfhost.sh gittensory:selfhost-ci
+#   SELFHOST_SMOKE_FORBID_EVENTS="selfhost_ai_cli_missing" ./scripts/smoke-selfhost.sh loopover-selfhost:ci
 #
 # Visual review (#3608): also boots a browserless/chromium sidecar, wires BROWSER_WS_ENDPOINT +
-# PUBLIC_SITE_ORIGIN automatically, and asserts the on-demand /gittensory/shot?url= route returns a real
+# PUBLIC_SITE_ORIGIN automatically, and asserts the on-demand /loopover/shot?url= route returns a real
 # PNG -- proving captureShot() actually renders through the self-host stub end to end, not just that the
 # app boots. The IMAGE under test must have been built with --build-arg INSTALL_VISUAL_REVIEW=true.
-#   SELFHOST_SMOKE_VISUAL_REVIEW=1 ./scripts/smoke-selfhost.sh gittensory:selfhost-ci-visual
+#   SELFHOST_SMOKE_VISUAL_REVIEW=1 ./scripts/smoke-selfhost.sh loopover-selfhost:ci-visual
 set -euo pipefail
 
 IMAGE="${1:?usage: smoke-selfhost.sh <image>}"
@@ -107,7 +107,7 @@ if [ "$VISUAL_REVIEW" = "1" ]; then
     docker logs "$BROWSERLESS_NAME" >&2 || true
     exit 1
   fi
-  # LOOPOVER_REVIEW_SCREENSHOTS must be on: the /gittensory/shot route itself 404s when it's off
+  # LOOPOVER_REVIEW_SCREENSHOTS must be on: the /loopover/shot route itself 404s when it's off
   # (deliberately "truly inert" by design, src/api/routes.ts), independent of BROWSER_WS_ENDPOINT.
   #
   # SMOKE_SHOT_TARGET must be a REAL, publicly resolvable URL, unlike this script's other *.example
@@ -180,26 +180,26 @@ curl -sf "http://127.0.0.1:${PORT}/ready" | grep -q '"ok":true'
 curl -sf "http://127.0.0.1:${PORT}/metrics" | grep -q 'loopover_uptime_seconds'
 
 if [ "$VISUAL_REVIEW" = "1" ]; then
-  echo "smoke-selfhost: checking /gittensory/shot renders a real PNG through the self-host browser stub"
-  SHOT_URL="http://127.0.0.1:${PORT}/gittensory/shot?url=$(printf '%s' "$SMOKE_SHOT_TARGET" | tr -d '\n')"
-  SHOT_HEADERS="$(curl -sf -D - -o /tmp/gt-smoke-shot.png "$SHOT_URL")"
+  echo "smoke-selfhost: checking /loopover/shot renders a real PNG through the self-host browser stub"
+  SHOT_URL="http://127.0.0.1:${PORT}/loopover/shot?url=$(printf '%s' "$SMOKE_SHOT_TARGET" | tr -d '\n')"
+  SHOT_HEADERS="$(curl -sf -D - -o /tmp/loopover-smoke-shot.png "$SHOT_URL")"
   echo "$SHOT_HEADERS" | grep -qi '^content-type: image/png' || {
-    echo "::error::/gittensory/shot did not return image/png" >&2
+    echo "::error::/loopover/shot did not return image/png" >&2
     echo "$SHOT_HEADERS" >&2
     docker logs "$APP_NAME" >&2 || true
     docker logs "$BROWSERLESS_NAME" >&2 || true
     exit 1
   }
-  SHOT_BYTES="$(wc -c </tmp/gt-smoke-shot.png | tr -d ' ')"
+  SHOT_BYTES="$(wc -c </tmp/loopover-smoke-shot.png | tr -d ' ')"
   # A real rendered page is comfortably more than a placeholder/error graphic would be; catches a "PNG
   # content-type but empty/near-empty body" false pass.
   if [ "$SHOT_BYTES" -lt 1024 ]; then
-    echo "::error::/gittensory/shot returned a suspiciously small PNG (${SHOT_BYTES} bytes)" >&2
+    echo "::error::/loopover/shot returned a suspiciously small PNG (${SHOT_BYTES} bytes)" >&2
     docker logs "$APP_NAME" >&2 || true
     exit 1
   fi
-  echo "smoke-selfhost: /gittensory/shot returned a real PNG (${SHOT_BYTES} bytes)"
-  rm -f /tmp/gt-smoke-shot.png
+  echo "smoke-selfhost: /loopover/shot returned a real PNG (${SHOT_BYTES} bytes)"
+  rm -f /tmp/loopover-smoke-shot.png
 fi
 
 LOGS="$(docker logs "$APP_NAME" 2>&1)"
