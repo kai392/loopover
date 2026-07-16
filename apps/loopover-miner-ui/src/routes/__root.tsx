@@ -1,5 +1,6 @@
 import { Outlet, createRootRoute, Link } from "@tanstack/react-router";
 import { GrafanaFooterLink } from "@/components/grafana-footer-link";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export const Route = createRootRoute({
   component: RootLayout,
@@ -28,6 +29,7 @@ function RootLayout() {
               Ledgers
             </Link>
           </nav>
+          <ThemeToggle />
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-6 py-8">

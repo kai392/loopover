@@ -7,10 +7,11 @@
 /*
  * gittensory-miner-ui renders from the same shared design system as
  * gittensory-ui (imported above from @loopover/ui-kit) — no
- * local tokens, colors, or fonts. Dark-only for now (the `.dark` class is
- * hardcoded on <html> in index.html), matching gittensory-ui's current
- * dark-only deployment — the light tokens ship in the shared theme so a
- * toggle can be added later without touching this stylesheet.
+ * local tokens, colors, or fonts. Light and dark both ship in the shared
+ * theme, switched by the `.dark` class on <html>: the inline no-flash script
+ * in index.html restores the persisted choice before first paint, and
+ * src/components/theme-toggle.tsx flips it — so this stylesheet stays
+ * theme-agnostic and needs no per-theme rules.
  */
 
 body {

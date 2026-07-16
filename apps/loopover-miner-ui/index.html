@@ -1,9 +1,26 @@
 <!doctype html>
-<html lang="en" class="dark" style="color-scheme: dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gittensory Miner</title>
+    <script>
+      // No-flash theme (#6508): restore the persisted theme before the app bundle loads so there is no flash
+      // of the wrong palette. An unset value — or anything other than "light" — defaults to dark, matching the
+      // look the previously-hardcoded class/style used to give existing and first-time users.
+      (function () {
+        try {
+          var r = document.documentElement;
+          if (localStorage.getItem("loopover.miner_theme") === "light") {
+            r.classList.remove("dark");
+            r.style.colorScheme = "light";
+          } else {
+            r.classList.add("dark");
+            r.style.colorScheme = "dark";
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
