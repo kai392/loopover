@@ -18,7 +18,7 @@
 //     caller passes the already-computed recommendations + eval row into runAutoApplyRecommendations here.
 // The host wires those at cutover; the AutoApplyDeps interface below is the seam.
 
-import type { OverridePayload, TuningRec } from "./auto-tune";
+import { RISK_MERGE_PRECISION, type OverridePayload, type TuningRec } from "./auto-tune";
 
 // ── Inline minimal D1 storage seam + helper (matches the runtime's env.DB calls, no CF type dependency) ──
 
@@ -61,10 +61,16 @@ interface OverrideRow {
   clear_at: string | null;
 }
 
+/** PURE: is a row's clear_at in the past relative to nowIso? (Skipped — not expired — when either is unset.)
+ *  Extracted so writeLiveOverride's clear_at-preservation logic uses the exact same rule as rowToOverride. */
+function clearAtIsExpired(clearAt: string | null, nowIso?: string): boolean {
+  return !!(clearAt && nowIso && clearAt <= nowIso);
+}
+
 /** PURE: a D1 row → a validated TunableOverride (or null when empty/expired/invalid). Unit-testable. */
 export function rowToOverride(row: OverrideRow | null, nowIso?: string): TunableOverride | null {
   if (!row) return null;
-  if (row.clear_at && nowIso && row.clear_at <= nowIso) return null; // past clear_at → treated as cleared
+  if (clearAtIsExpired(row.clear_at, nowIso)) return null; // past clear_at → treated as cleared
   const o: TunableOverride = {};
   if (typeof row.confidence_floor === "number" && row.confidence_floor >= 0 && row.confidence_floor <= 1) {
     o.confidenceFloor = row.confidence_floor;
@@ -140,7 +146,11 @@ export const SHADOW_PROMOTION_MIN_DECIDED = 10;
 export const SHADOW_SOAK_MS = 24 * 60 * 60 * 1000;
 
 /** PURE promotion gate: promote a SHADOW override → LIVE only when it is (1) strictly tightening vs the live
- *  config, (2) backed by >= SHADOW_PROMOTION_MIN_DECIDED decided samples, and (3) SOAKED past validated_until.
+ *  config, (2) backed by >= SHADOW_PROMOTION_MIN_DECIDED decided samples, (3) SOAKED past validated_until, and
+ *  (4) the tightening is STILL warranted by the project's freshly-measured merge precision. Without (4) a
+ *  24h-old snapshot's verdict is applied blind to what happened since — a transient bad batch of outcomes that
+ *  has since fully recovered would still get permanently promoted, because (1)-(3) only compare against the
+ *  UNCHANGED live config, never re-derive whether the tightening is still justified. (#stale-shadow-promotion-fix)
  *  Returns {promote, reason} so the cron can log why it did / didn't. (#276 evaluation-gated promotion) */
 export function evaluateShadowPromotion(args: {
   override: TunableOverride;
@@ -149,6 +159,10 @@ export function evaluateShadowPromotion(args: {
   decided: number;
   validatedUntilIso: string | null;
   nowIso: string;
+  /** The project's freshly-recomputed merge precision as of THIS tick (not the stale value the shadow rec was
+   *  originally computed from). null/undefined when unavailable — the freshness check is then skipped rather
+   *  than blocking promotion (fail toward the existing, already-verified soak+evidence gate). */
+  currentMergePrecision?: number | null;
 }): { promote: boolean; reason: string } {
   if (!isStrictlyTightening(args.override, args.liveFloor, args.liveScopeCap)) {
     return { promote: false, reason: "not strictly tightening vs live config" };
@@ -158,6 +172,12 @@ export function evaluateShadowPromotion(args: {
   }
   if (!args.validatedUntilIso || args.nowIso < args.validatedUntilIso) {
     return { promote: false, reason: `still soaking${args.validatedUntilIso ? ` until ${args.validatedUntilIso}` : ""}` };
+  }
+  if (args.currentMergePrecision != null && args.currentMergePrecision >= RISK_MERGE_PRECISION) {
+    return {
+      promote: false,
+      reason: `underlying merge precision recovered (${args.currentMergePrecision} >= ${RISK_MERGE_PRECISION}) — tightening no longer warranted`,
+    };
   }
   return { promote: true, reason: "tightening + evidence + soaked" };
 }
@@ -169,28 +189,38 @@ function newAuditId(): string {
   return `ova_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Load the active LIVE override for a project (null if none / expired / DB error). clear_at in the past =
- *  cleared. Fail-safe: a DB blip yields no override, never a blocked review. */
-export async function loadOverride(env: StorageEnv, project: string, nowIso?: string): Promise<TunableOverride | null> {
-  let row: OverrideRow | null;
+/** Internal: raw row fetch shared by loadOverride + writeLiveOverride, so a write can preserve the existing
+ *  clear_at column (loadOverride's public return, TunableOverride, doesn't carry clear_at). Fail-safe: null on
+ *  a DB blip. */
+async function loadOverrideRow(env: StorageEnv, project: string): Promise<OverrideRow | null> {
   try {
-    row = await storage(env)
+    return await storage(env)
       .prepare("SELECT confidence_floor, scope_cap_files, scope_cap_lines, clear_at FROM tunables_overrides WHERE project = ?")
       .bind(project)
       .first<OverrideRow>();
   } catch {
     return null; // fail-safe: no override on a DB blip
   }
-  return rowToOverride(row, nowIso);
+}
+
+/** Load the active LIVE override for a project (null if none / expired / DB error). clear_at in the past =
+ *  cleared. Fail-safe: a DB blip yields no override, never a blocked review. */
+export async function loadOverride(env: StorageEnv, project: string, nowIso?: string): Promise<TunableOverride | null> {
+  return rowToOverride(await loadOverrideRow(env, project), nowIso);
 }
 
 /** Write the LIVE override for a project, MERGED over any existing row (partial writes are additive, never
- *  destructive). Used by the apply path (force) + shadow promotion. */
-export async function writeLiveOverride(env: StorageEnv, project: string, o: TunableOverride): Promise<void> {
-  const merged = mergeOverride(await loadOverride(env, project), o);
+ *  destructive). Used by the apply path (force) + shadow promotion. Preserves any existing clear_at (an
+ *  operator's temporary-override expiration) rather than silently nulling it via INSERT OR REPLACE, UNLESS
+ *  that clear_at has itself already lapsed, in which case it is dropped rather than resurrected — nowIso is
+ *  passed into the internal re-read for exactly this reason (#stale-clear-at-fix). */
+export async function writeLiveOverride(env: StorageEnv, project: string, o: TunableOverride, nowIso?: string): Promise<void> {
+  const existingRow = await loadOverrideRow(env, project);
+  const merged = mergeOverride(rowToOverride(existingRow, nowIso), o);
+  const clearAt = existingRow && !clearAtIsExpired(existingRow.clear_at, nowIso) ? existingRow.clear_at : null;
   await storage(env)
-    .prepare("INSERT OR REPLACE INTO tunables_overrides (project, confidence_floor, scope_cap_files, scope_cap_lines, applied_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)")
-    .bind(project, merged.confidenceFloor ?? null, merged.scopeCap?.files ?? null, merged.scopeCap?.lines ?? null)
+    .prepare("INSERT OR REPLACE INTO tunables_overrides (project, confidence_floor, scope_cap_files, scope_cap_lines, applied_at, clear_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)")
+    .bind(project, merged.confidenceFloor ?? null, merged.scopeCap?.files ?? null, merged.scopeCap?.lines ?? null, clearAt)
     .run();
 }
 
@@ -204,32 +234,41 @@ export interface ShadowOverride {
   validatedUntil: string | null;
 }
 
+/** Internal: raw row fetch shared by loadShadowOverride + writeShadowOverride, so a write can preserve the
+ *  existing clear_at column (ShadowOverride, loadShadowOverride's public return, doesn't carry clear_at).
+ *  Fail-safe: null on a DB blip. */
+async function loadShadowOverrideRow(env: StorageEnv, project: string): Promise<(OverrideRow & { validated_until: string | null }) | null> {
+  try {
+    return await storage(env)
+      .prepare("SELECT confidence_floor, scope_cap_files, scope_cap_lines, validated_until, clear_at FROM tunables_overrides_shadow WHERE project = ?")
+      .bind(project)
+      .first<OverrideRow & { validated_until: string | null }>();
+  } catch {
+    return null;
+  }
+}
+
 /** Write a recommended override to the SHADOW queue with a future validated_until (the soak deadline). MERGED
- *  over any existing shadow row so a partial write never erases a prior queued tunable. (#partial-overwrite-fix) */
+ *  over any existing shadow row so a partial write never erases a prior queued tunable. (#partial-overwrite-fix)
+ *  Preserves any existing clear_at rather than silently nulling it via INSERT OR REPLACE (#stale-clear-at-fix). */
 export async function writeShadowOverride(env: StorageEnv, project: string, o: TunableOverride, validatedUntilIso: string): Promise<void> {
-  const existing = await loadShadowOverride(env, project);
-  const merged = mergeOverride(existing?.override ?? null, o);
+  const existingRow = await loadShadowOverrideRow(env, project);
+  const merged = mergeOverride(existingRow ? rowToOverride(existingRow) : null, o);
+  const clearAt = existingRow?.clear_at ?? null;
   await storage(env)
     .prepare(
-      "INSERT OR REPLACE INTO tunables_overrides_shadow (project, confidence_floor, scope_cap_files, scope_cap_lines, applied_at, validated_until) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?)",
+      "INSERT OR REPLACE INTO tunables_overrides_shadow (project, confidence_floor, scope_cap_files, scope_cap_lines, applied_at, validated_until, clear_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)",
     )
-    .bind(project, merged.confidenceFloor ?? null, merged.scopeCap?.files ?? null, merged.scopeCap?.lines ?? null, validatedUntilIso)
+    .bind(project, merged.confidenceFloor ?? null, merged.scopeCap?.files ?? null, merged.scopeCap?.lines ?? null, validatedUntilIso, clearAt)
     .run();
 }
 
 /** Load the pending shadow override for a project (null if none / DB error). */
 export async function loadShadowOverride(env: StorageEnv, project: string): Promise<ShadowOverride | null> {
-  try {
-    const row = await storage(env)
-      .prepare("SELECT confidence_floor, scope_cap_files, scope_cap_lines, validated_until FROM tunables_overrides_shadow WHERE project = ?")
-      .bind(project)
-      .first<OverrideRow & { validated_until: string | null }>();
-    if (!row) return null;
-    const override = rowToOverride(row);
-    return override ? { override, validatedUntil: row.validated_until } : null;
-  } catch {
-    return null;
-  }
+  const row = await loadShadowOverrideRow(env, project);
+  if (!row) return null;
+  const override = rowToOverride(row);
+  return override ? { override, validatedUntil: row.validated_until } : null;
 }
 
 /** Delete a project's shadow override (after promotion, or on clear). */
@@ -237,15 +276,18 @@ export async function deleteShadowOverride(env: StorageEnv, project: string): Pr
   await storage(env).prepare("DELETE FROM tunables_overrides_shadow WHERE project = ?").bind(project).run();
 }
 
-/** Record one override-lifecycle event to the dedicated (target-free) audit table. Fail-safe. (#279) */
+/** Record one override-lifecycle event to the dedicated (target-free) audit table. Fail-safe: a write error
+ *  never breaks the apply path, but it IS surfaced at error level (this is the operator's ONLY visibility
+ *  into an autonomous config change — a silently-dropped log line here defeats that entirely). */
 export async function recordOverrideAudit(env: StorageEnv, project: string, eventType: string, detail: Record<string, unknown>): Promise<void> {
   try {
     await storage(env)
       .prepare("INSERT INTO override_audit (id, project, event_type, detail) VALUES (?, ?, ?, ?)")
       .bind(newAuditId(), project, eventType, JSON.stringify(detail))
       .run();
-  } catch {
-    /* telemetry must never break the apply path */
+  } catch (error) {
+    // telemetry must never break the apply path, but it must not be silent either.
+    console.error(JSON.stringify({ level: "error", event: "override_audit_write_failed", project, eventType, message: String(error).slice(0, 160) }));
   }
 }
 
@@ -280,13 +322,16 @@ export async function applyOverrideRecommendation(
   opts: { force: boolean; soakMs: number; nowMs: number },
 ): Promise<ApplyResult> {
   if (opts.force) {
-    await writeLiveOverride(env, project, payload);
+    // Audit BEFORE the mutation: recordOverrideAudit is itself fail-safe (a swallowed D1 blip must never break
+    // the apply path), so writing it first means the worst case is an audit row for a write that then fails —
+    // never a live config change with zero audit trail. (#audit-before-write-fix)
     await recordOverrideAudit(env, project, "override_applied", { override: payload, force: true });
+    await writeLiveOverride(env, project, payload, new Date(opts.nowMs).toISOString());
     return { ok: true, applied: true, reason: `force-applied ${describeOverride(payload)}` };
   }
   const validatedUntil = new Date(opts.nowMs + opts.soakMs).toISOString();
-  await writeShadowOverride(env, project, payload, validatedUntil);
   await recordOverrideAudit(env, project, "override_shadowed", { override: payload, validatedUntil });
+  await writeShadowOverride(env, project, payload, validatedUntil);
   return { ok: true, applied: false, shadowed: true, validatedUntil, reason: `shadow-queued ${describeOverride(payload)} until ${validatedUntil}` };
 }
 
@@ -312,6 +357,11 @@ export interface AutoApplyContext {
   baseScopeCap?: { files: number; lines: number };
   /** This project's decided-sample count from the gate eval (drives the promotion evidence gate). */
   decided: number;
+  /** This project's freshly-computed merge precision from THIS tick's gate eval (the same field
+   *  computeTuningRecommendations reads). Threaded into evaluateShadowPromotion so a shadow-queued tightening
+   *  cannot be promoted once the precision that originally warranted it has since recovered. Optional/nullable
+   *  because a project can have no would-merge samples yet (GateEvalRow.mergePrecision is null in that case). */
+  mergePrecision?: number | null;
   /** The tuning advisor's recommendations for this project (only ones with an overridePayload are applied). */
   recs: TuningRec[];
   /** Current wall-clock (ms) — injected for determinism in tests. */
@@ -354,11 +404,14 @@ export async function runAutoApplyRecommendations(env: StorageEnv, ctx: AutoAppl
         decided: ctx.decided,
         validatedUntilIso: shadow.validatedUntil,
         nowIso,
+        ...(ctx.mergePrecision !== undefined ? { currentMergePrecision: ctx.mergePrecision } : {}),
       });
       if (gate.promote) {
-        await writeLiveOverride(env, ctx.project, shadow.override);
-        await deleteShadowOverride(env, ctx.project);
+        // Audit BEFORE the mutation — see applyOverrideRecommendation's force branch for why this ordering
+        // matters. (#audit-before-write-fix)
         await recordOverrideAudit(env, ctx.project, "override_promoted", { override: shadow.override, reason: gate.reason });
+        await writeLiveOverride(env, ctx.project, shadow.override, nowIso);
+        await deleteShadowOverride(env, ctx.project);
         console.log(JSON.stringify({ event: "auto_apply_promoted", project: ctx.project, override: describeOverride(shadow.override) }));
       } else {
         console.log(JSON.stringify({ event: "auto_apply_hold", project: ctx.project, reason: gate.reason }));

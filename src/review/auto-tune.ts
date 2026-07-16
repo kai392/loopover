@@ -283,7 +283,10 @@ export interface TuningRec {
 const MIN_DECIDED = 10;
 const READY_MERGE_PRECISION = 0.95;
 const READY_CLOSE_PRECISION = 0.9;
-const RISK_MERGE_PRECISION = 0.9;
+// Exported (not just a local const) so auto-apply.ts's shadow-promotion gate can refuse to promote a stale
+// tightening recommendation once the project's own freshly-measured precision has recovered back above this
+// same bar the recommendation was originally computed against (#stale-shadow-promotion-fix).
+export const RISK_MERGE_PRECISION = 0.9;
 // The tighten TARGET for a merge-precision failure: raise the floor to the known-good "ready" bar. It is a
 // project-agnostic, principled target — the apply path raises ONLY if it is above the project's current floor,
 // so an already-strict project is never affected (and a higher target can't add a bad auto-merge). (#275)

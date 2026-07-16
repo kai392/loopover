@@ -115,13 +115,32 @@ describe("evaluateShadowPromotion (#276 — tighten-only + evidence + soak gate)
   it("refuses when validated_until is unset (never soaked)", () => {
     expect(evaluateShadowPromotion({ ...base, validatedUntilIso: null }).promote).toBe(false);
   });
+
+  // (#stale-shadow-promotion-fix) The audited failure: a shadow tightening queued while precision was bad
+  // (0.2) must NOT be promoted once 24h later the project's OWN freshly-measured precision has recovered back
+  // above the risk floor (0.9) that originally triggered it — even though it is still strictly tightening vs
+  // the (unchanged) live config, has plenty of evidence, and has fully soaked.
+  it("refuses promotion once the underlying merge precision has recovered above the risk floor", () => {
+    const r = evaluateShadowPromotion({ ...base, currentMergePrecision: 0.92 });
+    expect(r.promote).toBe(false);
+    expect(r.reason).toMatch(/recovered/);
+  });
+  it("still promotes when the current merge precision is still below the risk floor", () => {
+    expect(evaluateShadowPromotion({ ...base, currentMergePrecision: 0.5 }).promote).toBe(true);
+  });
+  it("still promotes when currentMergePrecision is omitted (freshness check is skipped, not blocking)", () => {
+    expect(evaluateShadowPromotion(base).promote).toBe(true);
+  });
+  it("a currentMergePrecision exactly AT the risk floor still refuses (>= boundary)", () => {
+    expect(evaluateShadowPromotion({ ...base, currentMergePrecision: 0.9 }).promote).toBe(false);
+  });
 });
 
 // ── A tiny in-memory D1-shaped store for the store/orchestration tests (the deferred infra seam) ─────────
 
 type Tables = {
   live: Map<string, { confidence_floor: number | null; scope_cap_files: number | null; scope_cap_lines: number | null; clear_at: string | null }>;
-  shadow: Map<string, { confidence_floor: number | null; scope_cap_files: number | null; scope_cap_lines: number | null; validated_until: string | null }>;
+  shadow: Map<string, { confidence_floor: number | null; scope_cap_files: number | null; scope_cap_lines: number | null; validated_until: string | null; clear_at?: string | null }>;
   audit: Array<{ project: string; event_type: string; detail: string | null; created_at: string }>;
 };
 
@@ -147,11 +166,11 @@ function fakeEnv(): { env: StorageEnv; tables: Tables } {
       },
       async run(): Promise<unknown> {
         if (sql.startsWith("INSERT OR REPLACE INTO tunables_overrides_shadow")) {
-          const [project, cf, scf, scl, vu] = bound as [string, number | null, number | null, number | null, string | null];
-          tables.shadow.set(project, { confidence_floor: cf, scope_cap_files: scf, scope_cap_lines: scl, validated_until: vu });
+          const [project, cf, scf, scl, vu, clearAt] = bound as [string, number | null, number | null, number | null, string | null, string | null];
+          tables.shadow.set(project, { confidence_floor: cf, scope_cap_files: scf, scope_cap_lines: scl, validated_until: vu, clear_at: clearAt ?? null });
         } else if (sql.startsWith("INSERT OR REPLACE INTO tunables_overrides")) {
-          const [project, cf, scf, scl] = bound as [string, number | null, number | null, number | null];
-          tables.live.set(project, { confidence_floor: cf, scope_cap_files: scf, scope_cap_lines: scl, clear_at: null });
+          const [project, cf, scf, scl, clearAt] = bound as [string, number | null, number | null, number | null, string | null];
+          tables.live.set(project, { confidence_floor: cf, scope_cap_files: scf, scope_cap_lines: scl, clear_at: clearAt ?? null });
         } else if (sql.startsWith("DELETE FROM tunables_overrides_shadow")) {
           tables.shadow.delete(bound[0] as string);
         } else if (sql.startsWith("DELETE FROM tunables_overrides")) {
@@ -215,6 +234,44 @@ describe("applyOverrideRecommendation (#277 — force vs shadow-soak)", () => {
     expect(tables.shadow.get("g")?.confidence_floor).toBe(0.95);
     expect(tables.live.has("g")).toBe(false);
   });
+
+  // (#audit-before-write-fix) The audited failure: a transient D1 blip on the LIVE write must not leave the
+  // apply path with zero audit trail. Proven here by making ONLY the live-table write throw while the audit
+  // INSERT succeeds — if the ordering is right (audit-first), the audit row exists despite the write failing.
+  it("records the audit row BEFORE the live write, so a write failure still leaves an audit trail", async () => {
+    const audit: Array<{ eventType: string }> = [];
+    const env: StorageEnv = {
+      DB: {
+        prepare: (sql: string) => {
+          const stmt = {
+            bind(...vals: unknown[]) {
+              return {
+                async first() {
+                  return null;
+                },
+                async run() {
+                  if (sql.startsWith("INSERT INTO override_audit")) {
+                    audit.push({ eventType: vals[2] as string });
+                    return {};
+                  }
+                  if (sql.startsWith("INSERT OR REPLACE INTO tunables_overrides") && !sql.includes("_shadow")) {
+                    throw new Error("d1 write blip"); // the LIVE write fails
+                  }
+                  return {};
+                },
+                async all() {
+                  return { results: [] };
+                },
+              };
+            },
+          };
+          return stmt as unknown as ReturnType<StorageLike["prepare"]>;
+        },
+      },
+    };
+    await expect(applyOverrideRecommendation(env, "g", { confidenceFloor: 0.95 }, { force: true, soakMs: 1000, nowMs: 0 })).rejects.toThrow("d1 write blip");
+    expect(audit.some((a) => a.eventType === "override_applied")).toBe(true);
+  });
 });
 
 describe("runAutoApplyRecommendations (#278 — closes the loop: queue tightening → soak → promote)", () => {
@@ -275,6 +332,26 @@ describe("runAutoApplyRecommendations (#278 — closes the loop: queue tightenin
     await runAutoApplyRecommendations(env, ctx({ recs: [], decided: SHADOW_PROMOTION_MIN_DECIDED - 1 }));
     expect(tables.live.has("g")).toBe(false);
     expect(tables.shadow.has("g")).toBe(true);
+  });
+
+  // (#stale-shadow-promotion-fix) The exact audited scenario: a shadow tightening was queued (and has since
+  // soaked past its deadline) when the project's precision was 0.2. By the time the cron re-ticks, the ctx the
+  // host passes in carries the FRESHLY-recomputed precision (0.92 — recovered above the 0.9 risk floor). The
+  // promotion must be refused even though the soak/evidence/tightening checks would all otherwise pass.
+  it("refuses to promote a stale shadow tightening once the project's precision has since recovered", async () => {
+    const { env, tables } = fakeEnv();
+    tables.shadow.set("g", { confidence_floor: 0.95, scope_cap_files: null, scope_cap_lines: null, validated_until: "2026-06-19T00:00:00Z" });
+    await runAutoApplyRecommendations(env, ctx({ recs: [], mergePrecision: 0.92 }));
+    expect(tables.live.has("g")).toBe(false); // NOT promoted
+    expect(tables.shadow.has("g")).toBe(true); // stays queued rather than being silently dropped
+  });
+
+  it("still promotes a soaked shadow override when the fresh precision has NOT recovered", async () => {
+    const { env, tables } = fakeEnv();
+    tables.shadow.set("g", { confidence_floor: 0.95, scope_cap_files: null, scope_cap_lines: null, validated_until: "2026-06-19T00:00:00Z" });
+    await runAutoApplyRecommendations(env, ctx({ recs: [], mergePrecision: 0.5 }));
+    expect(tables.live.get("g")?.confidence_floor).toBe(0.95);
+    expect(tables.shadow.has("g")).toBe(false);
   });
 });
 
@@ -439,6 +516,30 @@ describe("writeLiveOverride / deleteLiveOverride (D1 writes)", () => {
     await deleteLiveOverride(env, "g");
     expect(tables.live.has("g")).toBe(false);
   });
+
+  // (#stale-clear-at-fix) Previously the INSERT OR REPLACE column list omitted clear_at entirely, so SQLite's
+  // REPLACE (delete-then-insert) unconditionally nulled any existing operator-set expiration on every write.
+  it("PRESERVES an existing (non-expired) clear_at across a write instead of silently nulling it", async () => {
+    const { env, tables } = fakeEnv();
+    tables.live.set("g", { confidence_floor: 0.9, scope_cap_files: null, scope_cap_lines: null, clear_at: "2099-01-01T00:00:00Z" });
+    await writeLiveOverride(env, "g", { confidenceFloor: 0.95 });
+    expect(tables.live.get("g")?.clear_at).toBe("2099-01-01T00:00:00Z");
+    expect(tables.live.get("g")?.confidence_floor).toBe(0.95);
+  });
+
+  // (#stale-clear-at-fix) Previously the internal loadOverride() re-read inside writeLiveOverride never passed
+  // nowIso, so rowToOverride's `row.clear_at && nowIso && ...` guard short-circuited and an ALREADY-EXPIRED
+  // override was merged back in as still active. Passing nowIso through fixes both: the expired floor is not
+  // resurrected, and the stale clear_at itself is dropped rather than carried forward.
+  it("does NOT resurrect an ALREADY-EXPIRED override (or its stale clear_at) when nowIso is passed", async () => {
+    const { env, tables } = fakeEnv();
+    tables.live.set("g", { confidence_floor: 0.8, scope_cap_files: null, scope_cap_lines: null, clear_at: "2020-01-01T00:00:00Z" });
+    await writeLiveOverride(env, "g", { scopeCap: { files: 3, lines: 100 } }, "2026-06-20T00:00:00Z");
+    const row = tables.live.get("g");
+    expect(row?.confidence_floor).toBeNull(); // the expired floor is NOT resurrected
+    expect(row?.clear_at).toBeNull(); // the lapsed clear_at is not carried forward either
+    expect(row?.scope_cap_files).toBe(3); // the new write still applies normally
+  });
 });
 
 describe("writeShadowOverride / loadShadowOverride / deleteShadowOverride", () => {
@@ -446,12 +547,14 @@ describe("writeShadowOverride / loadShadowOverride / deleteShadowOverride", () =
     const { env, tables } = fakeEnv();
     tables.shadow.set("g", { confidence_floor: null, scope_cap_files: 5, scope_cap_lines: 200, validated_until: "2026-06-19T00:00:00Z" });
     await writeShadowOverride(env, "g", { confidenceFloor: 0.95 }, "2026-06-25T00:00:00Z");
-    expect(tables.shadow.get("g")).toEqual({ confidence_floor: 0.95, scope_cap_files: 5, scope_cap_lines: 200, validated_until: "2026-06-25T00:00:00Z" });
+    // clear_at: null is now asserted explicitly (previously the INSERT OR REPLACE column list dropped clear_at
+    // entirely, so the written row never carried it — the fix now writes it through on every shadow write).
+    expect(tables.shadow.get("g")).toEqual({ confidence_floor: 0.95, scope_cap_files: 5, scope_cap_lines: 200, validated_until: "2026-06-25T00:00:00Z", clear_at: null });
   });
   it("writes a fresh shadow row when none exists (existing?.override ?? null arm)", async () => {
     const { env, tables } = fakeEnv();
     await writeShadowOverride(env, "g", { scopeCap: { files: 2, lines: 40 } }, "2026-06-25T00:00:00Z");
-    expect(tables.shadow.get("g")).toEqual({ confidence_floor: null, scope_cap_files: 2, scope_cap_lines: 40, validated_until: "2026-06-25T00:00:00Z" });
+    expect(tables.shadow.get("g")).toEqual({ confidence_floor: null, scope_cap_files: 2, scope_cap_lines: 40, validated_until: "2026-06-25T00:00:00Z", clear_at: null });
   });
   it("loadShadowOverride returns the override + validatedUntil when present", async () => {
     const { env, tables } = fakeEnv();
@@ -461,6 +564,13 @@ describe("writeShadowOverride / loadShadowOverride / deleteShadowOverride", () =
   it("loadShadowOverride returns null when there is no row (!row arm)", async () => {
     const { env } = fakeEnv();
     expect(await loadShadowOverride(env, "missing")).toBeNull();
+  });
+  // (#stale-clear-at-fix) The shadow table has the same column-drop bug as the live table.
+  it("PRESERVES an existing clear_at across a shadow write instead of silently nulling it", async () => {
+    const { env, tables } = fakeEnv();
+    tables.shadow.set("g", { confidence_floor: 0.9, scope_cap_files: null, scope_cap_lines: null, validated_until: "2026-06-19T00:00:00Z", clear_at: "2099-01-01T00:00:00Z" });
+    await writeShadowOverride(env, "g", { confidenceFloor: 0.95 }, "2026-06-25T00:00:00Z");
+    expect(tables.shadow.get("g")?.clear_at).toBe("2099-01-01T00:00:00Z");
   });
   it("loadShadowOverride returns null when the row maps to an EMPTY override (rowToOverride → null arm)", async () => {
     const { env, tables } = fakeEnv();
@@ -484,8 +594,15 @@ describe("recordOverrideAudit / listOverrideAudit", () => {
     await recordOverrideAudit(env, "g", "override_applied", { force: true });
     expect(tables.audit.at(-1)).toMatchObject({ project: "g", event_type: "override_applied", detail: JSON.stringify({ force: true }) });
   });
-  it("SWALLOWS a DB error (telemetry must never break the apply path)", async () => {
-    await expect(recordOverrideAudit(throwingEnv(), "g", "x", {})).resolves.toBeUndefined();
+  it("SWALLOWS a DB error but logs it at error level (telemetry never breaks the apply path, but is never silent)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(recordOverrideAudit(throwingEnv(), "g", "x", {})).resolves.toBeUndefined();
+      const errLog = errorSpy.mock.calls.map((c) => String(c[0])).find((s) => s.includes("override_audit_write_failed"));
+      expect(errLog).toBeTruthy();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
   it("lists audit rows newest-first, mapped to the public shape", async () => {
     const { env } = fakeEnv();
@@ -617,6 +734,34 @@ describe("runAutoApplyRecommendations — remaining branches", () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  // (#audit-before-write-fix) Same ordering guarantee as applyOverrideRecommendation's force branch, but for
+  // the PROMOTION path: audits before writing live, so a write failure mid-promotion still leaves a trail.
+  it("promotion audits BEFORE writing live, so a write failure still records the promotion attempt", async () => {
+    const { env: baseEnv, tables } = fakeEnv();
+    tables.shadow.set("g", { confidence_floor: 0.95, scope_cap_files: null, scope_cap_lines: null, validated_until: "2026-06-19T00:00:00Z" });
+    const env: StorageEnv = {
+      DB: {
+        prepare: (sql: string) => {
+          if (sql.startsWith("INSERT OR REPLACE INTO tunables_overrides") && !sql.includes("_shadow")) {
+            return {
+              bind: () => ({
+                async run() {
+                  throw new Error("d1 write blip"); // the LIVE write fails during promotion
+                },
+              }),
+            } as unknown as ReturnType<StorageLike["prepare"]>;
+          }
+          return baseEnv.DB.prepare(sql);
+        },
+      },
+    };
+    await runAutoApplyRecommendations(env, ctx({ recs: [] })); // fails safe: throws are caught, never rethrown
+    expect(tables.audit.some((a) => a.event_type === "override_promoted")).toBe(true);
+    // the write (and the subsequent delete) never completed, so the shadow row is still queued
+    expect(tables.shadow.has("g")).toBe(true);
+    expect(tables.live.has("g")).toBe(false);
   });
 
   it("breaks after the FIRST tightening rec (only one pending soak at a time)", async () => {
