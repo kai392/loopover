@@ -727,6 +727,26 @@ describe("buildUnifiedReviewInput", () => {
     expect(deriveUnifiedStatus(input)).toBe("held");
   });
 
+  it("merges a reviewer's free-form suggestions into the nits list (#6634)", () => {
+    const input = buildUnifiedReviewInput({
+      changedFiles: 1,
+      reviews: [reviewNote("merge", { nits: ["Rename foo"], suggestions: ["Consider extracting the parser"] })],
+    });
+    expect(input.nits).toContain("Consider extracting the parser"); // free-form suggestion merged in
+    expect(input.nits).toContain("Rename foo"); // alongside the explicit nit
+  });
+
+  it("a sole valid reviewer's blocker still counts as consensus (#6634)", () => {
+    const input = buildUnifiedReviewInput({ changedFiles: 1, reviews: [reviewNote("close", { blockers: ["Real defect"] })] });
+    expect(input.consensusBlocker).toBe(true); // valid.length === 1 && reviewersWithBlockers === 1
+    expect(deriveUnifiedStatus(input)).toBe("blocked");
+  });
+
+  it("consensusBlocker is false when no reviewer reports a blocker (#6634)", () => {
+    const input = buildUnifiedReviewInput({ changedFiles: 1, reviews: [reviewNote("merge"), reviewNote("merge")] });
+    expect(input.consensusBlocker).toBe(false);
+  });
+
   it("counts reviewers that produced no verdict (partial review)", () => {
     const input = buildUnifiedReviewInput({ changedFiles: 1, reviews: [reviewNote("merge"), { model: "m2", notes: null }] });
     expect(input.failedCount).toBe(1);
