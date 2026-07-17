@@ -115,8 +115,8 @@ is a generic role vocabulary, not a gittensory assumption — no change needed.
 
 | Location | Assumption | Category | Should become |
 | --- | --- | --- | --- |
-| `maintainer-recap-wire.ts:203` | `actor: "gittensory"` | (7) branding | Per-tenant actor identity string. |
-| `parity.ts:254`, `stats.ts:112`, `parity-wire.ts:218` | shadow-writer default `"gittensory"` (parity self-join compares `reviewbot` vs `gittensory`) | (7) branding | Per-tenant shadow-writer name; the parity comparison is otherwise generic. |
+| `maintainer-recap-wire.ts:203` | `actor: "loopover"` | (7) branding | Per-tenant actor identity string. |
+| `parity.ts:254`, `stats.ts:112` | shadow-writer default `"loopover"` (parity self-join compares `reviewbot` vs `loopover`) | (7) branding | Per-tenant shadow-writer name; the parity comparison is otherwise generic. (`parity-wire.ts:218`'s `computeParityReadiness` deliberately overrides this default to the preserved `gittensory-native` DB-source literal instead -- a historical-compat value, not a per-tenant branding default.) |
 
 ### `src/review/check-names.ts` and `src/review/unified-comment*.ts` — check-run + comment branding
 
@@ -138,8 +138,8 @@ These were checked and are already tenant-agnostic / config-driven; call them ou
 implementation issue doesn't redo them:
 
 - **`src/rules/` gate logic** — `predicted-gate.ts` re-exports the engine's `predicted-gate.js` wholesale,
-  and `advisory.ts` contains only generic gate-decision logic (the `gittensory`/`loopover` mentions at
-  `advisory.ts:563/895/911/945` are explanatory comments, not hardcoded identity). The rules layer is
+  and `advisory.ts` contains only generic gate-decision logic (the `loopover` mentions at
+  `advisory.ts:580/919/935/969` are explanatory comments, not hardcoded identity). The rules layer is
   already repo-agnostic.
 - **Label propagation** — `linked-issue-label-propagation.ts` / `-fetch.ts` drive their mappings from a
   configurable `linkedIssueLabelPropagation` setting (`DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION` fallback);
@@ -150,7 +150,7 @@ implementation issue doesn't redo them:
   (the finding above), not the mechanism.
 - **Signals maintainer-lane / role model** — `signals/engine.ts:1642` uses a generic forge role vocabulary
   (`owner`/`org_member`/`collaborator`/`repo_maintainer`), not gittensory-specific roles.
-- **`cutover-gate.ts` repo list** — the `"JSONbored/gittensory,..."` string at `cutover-gate.ts:8` is a
+- **`cutover-gate.ts` repo list** — the `"JSONbored/loopover,..."` string at `cutover-gate.ts:8` is a
   comment example of the `owner/repo` env format; the actual list is env-supplied, not hardcoded.
 
 ## Prioritized checklist for the follow-up implementation issue

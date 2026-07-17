@@ -129,7 +129,7 @@ loopover-mcp analyze-branch --login jsonbored \
 ## Review your PR locally before you push
 
 `loopover-mcp review-pr` composes the existing preflight, slop-risk, and PR-text-lint checks into
-ONE report, so your own local agent (Claude Code, Codex, etc.) can see everything the gittensory gate
+ONE report, so your own local agent (Claude Code, Codex, etc.) can see everything the loopover gate
 would flag before you ever open a PR. It is a thin composition layer — it calls the same checks
 `preflight`, `slop-risk`, and `lint-pr-text` already run and merges their output; it does not
 reimplement any of them.

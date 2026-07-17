@@ -1,7 +1,7 @@
 /*
- * Gittensory design system — shared tokens + base layer.
+ * LoopOver design system — shared tokens + base layer.
  * Extracted from apps/loopover-ui/src/styles.css so every consuming app
- * (gittensory-ui, gittensory-miner-ui) renders from one source of truth.
+ * (loopover-ui, loopover-miner-ui) renders from one source of truth.
  * Palette: Lovable Lime — AA-tuned citron/lime (#c4f24c family), light + dark
  * are first-class, toggled via .dark on documentElement. All colors in oklch.
  * Fonts: Space Grotesk (headings) + DM Sans (body) + JetBrains Mono (code).
@@ -291,8 +291,8 @@
   }
 }
 
-/* Shared focus + hover utilities — generic enough that both gittensory-ui
-   and gittensory-miner-ui use them directly, unlike the hero/marketing-only
+/* Shared focus + hover utilities — generic enough that both loopover-ui
+   and loopover-miner-ui use them directly, unlike the hero/marketing-only
    flourishes (aurora-glow, bg-grid, gradient-border) that stay app-local. */
 @layer utilities {
   .focus-ring {

@@ -1,6 +1,6 @@
 # Review-enrichment service (REES)
 
-A standalone microservice that produces a structured **review brief** for the gittensory review engine. Run it
+A standalone microservice that produces a structured **review brief** for the loopover review engine. Run it
 in-network alongside a self-hosted engine via the repo-root `docker-compose --profile rees` service (the simplest
 path, no separate hosting to manage — see the [self-hosting REES docs](https://loopover.ai/docs/self-hosting-rees)),
 or deploy it as its own service on any platform that can run a Dockerfile-based Node service — see
@@ -247,7 +247,7 @@ Set these Railway service variables:
 | `SENTRY_TRACES_SAMPLE_RATE`    | Optional; defaults to `0`, so errors report without tracing.            |
 | `SENTRY_RELEASE`               | Optional override. Only set it when that exact REES bundle is uploaded. |
 | `SENTRY_URL`                   | Optional Sentry API URL; defaults to `https://sentry.io`.               |
-| `SENTRY_REPOSITORY`            | Optional; defaults to `JSONbored/gittensory` for commit association.    |
+| `SENTRY_REPOSITORY`            | Optional; defaults to `JSONbored/loopover` for commit association.      |
 | `REES_SENTRY_UPLOAD_STRICT`    | Optional. Set `true` to fail startup if source-map upload fails.        |
 | `REES_SENTRY_VALIDATE_RELEASE` | Optional. Set `false` only to disable post-upload release validation.   |
 
@@ -296,7 +296,7 @@ Useful production queries:
   - `event:rees_route_error route:/v1/enrich method:POST`
 - Analyzer failures grouped by analyzer:
   - `event:rees_analyzer_degraded analyzer:history`
-  - `event:rees_analyzer_degraded analyzer:dependency repo:JSONbored/gittensory`
+  - `event:rees_analyzer_degraded analyzer:dependency repo:JSONbored/loopover`
 - Source-map upload/startup failures on a Railway deploy:
   - `event:rees_sourcemap_upload_failed railwayDeploymentId:<deploy-id>`
 - Process-level crashes:
