@@ -275,6 +275,32 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     expect(inactive.lane.lane).toBe("inactive");
   });
 
+  // #6771: the local extractor's own comment claims it matches the canonical src/db/repositories.ts extractor,
+  // which stops at MAX_LINKED_ISSUE_NUMBERS = 50 — but it collected every match uncapped. A body can easily fit
+  // 50+ short closing refs inside the 20k-char truncation this runs on, so the miner's local prediction could
+  // diverge from the maintainer-side gate it exists to mirror.
+  it("REGRESSION (#6771): caps extracted linked issues at the canonical 50, across all three reference forms", () => {
+    // 66 DISTINCT closing references: 30 bare `#N`, 18 qualified `owner/repo#N`, 18 full-URL — all same-repo.
+    const bare = Array.from({ length: 30 }, (_, i) => `Closes #${i + 1}`);
+    const qualified = Array.from({ length: 18 }, (_, i) => `Fixes acme/widgets#${i + 101}`);
+    const urls = Array.from({ length: 18 }, (_, i) => `Resolves https://github.com/acme/widgets/issues/${i + 201}`);
+    const body = [...bare, ...qualified, ...urls].join("\n");
+
+    const preflight = buildPreflightResult(
+      { repoFullName: "acme/widgets", title: "Many links", body, linkedIssues: [] },
+      REPO,
+      [],
+      [],
+    );
+
+    // The body genuinely carries more than the cap, and the extractor's contribution is bounded at 50.
+    expect(bare.length + qualified.length + urls.length).toBeGreaterThan(50);
+    expect(preflight.linkedIssues).toHaveLength(50);
+    // Still real, deduped, positive issue numbers — the cap truncates, it doesn't corrupt.
+    expect(new Set(preflight.linkedIssues).size).toBe(50);
+    expect(preflight.linkedIssues.every((n) => Number.isInteger(n) && n > 0)).toBe(true);
+  });
+
   it("exercises manifest globstar path matching", () => {
     const manifest: FocusManifest = {
       present: true,

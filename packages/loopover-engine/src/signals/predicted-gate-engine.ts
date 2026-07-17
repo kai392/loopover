@@ -917,6 +917,10 @@ export function tokenize(value: string): string[] {
     .filter((term) => term.length > 2 && !STOPWORDS.has(term));
 }
 
+/** Mirrors `MAX_LINKED_ISSUE_NUMBERS` in `src/db/repositories.ts` — the ceiling the canonical extractor stops
+ *  collecting at. Kept as a local literal because this module stays free of host imports by design (#6771). */
+const MAX_LINKED_ISSUE_NUMBERS = 50;
+
 function extractLinkedIssueNumbers(text: string, repoFullName: string): number[] {
   // GitHub's native closing-keyword linker does not treat backtick-wrapped text as a real "Closes #N" directive,
   // and this repo's own PR template contains "(e.g. `Closes #123`)". Reject regex hits that fall inside an inline
@@ -949,7 +953,12 @@ function extractLinkedIssueNumbers(text: string, repoFullName: string): number[]
     if (insideCodeSpan(match)) continue;
     if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
   }
-  return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];
+  // Cap at the same ceiling the canonical extractor enforces (#6771): src/db/repositories.ts's
+  // MAX_LINKED_ISSUE_NUMBERS = 50, which stops collecting once reached. Duplicated as a literal rather than
+  // imported because this module is host-import-free by design; the cross-reference above is the drift guard.
+  // Without it, a body with 50+ short closing references (easily within the 20k-char truncation this runs on)
+  // made the miner's local prediction diverge from the maintainer-side gate it exists to mirror.
+  return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))].slice(0, MAX_LINKED_ISSUE_NUMBERS);
 }
 
 function isMaintainerAssociation(value: string | null | undefined): boolean {
