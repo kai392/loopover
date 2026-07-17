@@ -1524,7 +1524,7 @@ export function createApp() {
         // Whether this PR's repo has opted into the grounded @loopover chat Q&A surface (#6489) --
         // gates the maintainer panel's Chat Q&A section per PR so an instance that hasn't enabled it
         // sees no new UI for that PR, rather than a disabled-looking version of it.
-        chatQaEnabled: previewChatQaEnabledByRepo.get(repoFullName) ?? false,
+        chatQaEnabled: previewChatQaEnabledByRepo.get(repoFullName)!,
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
       qualityDashboard: { ...qualityDashboard, gateOutcomeBreakdown },
@@ -2974,10 +2974,7 @@ export function createApp() {
         outcome: "completed",
         detail: `invocation ${invocationCount}/${maxPerWindow} within ${windowHours}h window`,
         metadata: { repoFullName: fullName, issueNumber: number, command: "chat", aiCostBearing: true, source: "dashboard" },
-      }).catch(
-        /* v8 ignore next -- fail-safe: an audit write failure never blocks the request */
-        () => undefined,
-      );
+      });
       if (invocationCount > maxPerWindow) {
         return c.json({
           status: "rate_limited",
