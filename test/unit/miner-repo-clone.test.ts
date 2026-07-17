@@ -62,6 +62,11 @@ describe("resolveRepoCloneBaseDir / resolveRepoCloneDir (#5132)", () => {
 
 describe("ensureRepoCloned (#5132)", () => {
   it("clones a real repo on first use, and fetches + hard-resets an existing clone to pick up new commits", async () => {
+    // Nine real, sequential git subprocess spawns (origin init/add/commit, the first ensureRepoCloned's
+    // clone, a second origin commit, and the second ensureRepoCloned's fetch+checkout+reset) --
+    // legitimately more wall-clock latency than the default 15s test timeout reliably covers under
+    // concurrent full-suite load (passes in well under 1s in isolation; the same class of flake fixed for
+    // test/unit/agent-sdk-driver.test.ts's real-git-subprocess test).
     const root = tempRoot("loopover-miner-repo-clone-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -80,9 +85,14 @@ describe("ensureRepoCloned (#5132)", () => {
     expect(second.ok).toBe(true);
     expect(readFileSync(join(second.repoPath, "README.md"), "utf8")).toBe("hello\n");
     expect(readFileSync(join(second.repoPath, "second.txt"), "utf8")).toBe("second file\n");
-  });
+  }, 60000);
 
   it("respects a non-default baseBranch on the fetch+reset path", async () => {
+    // Ten real, sequential git subprocess spawns (origin init/add/commit, the branch checkout, the first
+    // ensureRepoCloned's clone, the second commitFile's add/commit, and the second ensureRepoCloned's
+    // fetch+checkout+reset) -- legitimately more wall-clock latency than the default 15s test timeout
+    // reliably covers under concurrent full-suite load (passes in well under 1s in isolation; the same
+    // class of flake fixed for test/unit/agent-sdk-driver.test.ts's real-git-subprocess test).
     const root = tempRoot("loopover-miner-repo-clone-branch-");
     const originPath = initOriginRepo(root);
     execFileSync("git", ["checkout", "-b", "develop"], { cwd: originPath, stdio: "ignore" });
@@ -95,7 +105,7 @@ describe("ensureRepoCloned (#5132)", () => {
     const second = await ensureRepoCloned("acme/widgets", { cloneBaseDir, remoteUrl: originPath, baseBranch: "develop" });
     expect(second.ok).toBe(true);
     expect(readFileSync(join(second.repoPath, "develop-only.txt"), "utf8")).toBe("develop content\n");
-  });
+  }, 60000);
 
   it("rejects a malformed repoFullName", async () => {
     await expect(ensureRepoCloned("not-a-repo")).rejects.toThrow("invalid_repo_full_name");
@@ -110,6 +120,8 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("returns ok:false on a fetch failure without touching the existing clone (injected runGit)", async () => {
+    // Real origin init + a real clone before the injected-runGit assertion. See the first test in this
+    // block for why this needs an explicit timeout.
     const root = tempRoot("loopover-miner-repo-clone-fetchfail-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -120,9 +132,11 @@ describe("ensureRepoCloned (#5132)", () => {
     const second = await ensureRepoCloned("acme/widgets", { cloneBaseDir, remoteUrl: originPath, runGit });
     expect(second.ok).toBe(false);
     expect(second.error).toBe("network unreachable");
-  });
+  }, 60000);
 
   it("returns ok:false on a checkout failure and a reset failure (injected runGit)", async () => {
+    // Real origin init + a real clone before the injected-runGit assertions. See the first test in this
+    // block for why this needs an explicit timeout.
     const root = tempRoot("loopover-miner-repo-clone-checkoutfail-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -137,7 +151,7 @@ describe("ensureRepoCloned (#5132)", () => {
     const resetResult = await ensureRepoCloned("acme/widgets", { cloneBaseDir, remoteUrl: originPath, runGit: resetFails });
     expect(resetResult.ok).toBe(false);
     expect(resetResult.error).toBe("git_reset_failed");
-  });
+  }, 60000);
 
   it("returns ok:false with a fallback error message on a clone failure with no stderr (injected runGit)", async () => {
     const root = tempRoot("loopover-miner-repo-clone-nostderr-");
@@ -149,6 +163,8 @@ describe("ensureRepoCloned (#5132)", () => {
   });
 
   it("rejects a dash-prefixed baseBranch before invoking git (#5923)", async () => {
+    // Real origin init + a real clone before the injected-runGit assertion. See the first test in this
+    // block for why this needs an explicit timeout.
     const root = tempRoot("loopover-miner-repo-clone-unsafe-branch-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -163,7 +179,7 @@ describe("ensureRepoCloned (#5132)", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("invalid_base_branch");
     expect(runGitCalls).toBe(0);
-  });
+  }, 60000);
 
   it("rejects a dash-prefixed remoteUrl before invoking git (#5923)", async () => {
     const root = tempRoot("loopover-miner-repo-clone-unsafe-url-");

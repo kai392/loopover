@@ -57,6 +57,11 @@ describe("createRealWorktreeExec (#5132)", () => {
 
 describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
   it("REGRESSION: worktreePath is a real, checked-out git repo on a real branch, not an empty directory", async () => {
+    // Six real, sequential git subprocess spawns (origin init/add/commit, the clone inside
+    // prepareAttemptWorktree, its `git worktree add`, and this test's own rev-parse) -- legitimately more
+    // wall-clock latency than the default 15s test timeout reliably covers under concurrent full-suite
+    // load (passes in well under 1s in isolation; the same class of flake fixed for
+    // test/unit/agent-sdk-driver.test.ts's real-git-subprocess test).
     const root = tempRoot("loopover-miner-attempt-worktree-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -72,9 +77,11 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
     // And it's a real, distinct branch -- not just a copy of main.
     const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: result.worktreePath, encoding: "utf8" }).trim();
     expect(branch).toBe("loopover/attempt/attempt-1");
-  });
+  }, 60000);
 
   it("removes a succeeded attempt's worktree but retains a failed one's, per the engine's own retention policy", async () => {
+    // Real git subprocess round trip -- two full prepareAttemptWorktree/cleanupAttemptWorktree cycles, more
+    // real spawns than the REGRESSION test above. See its comment for why this needs an explicit timeout.
     const root = tempRoot("loopover-miner-attempt-worktree-cleanup-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -90,7 +97,7 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
     const retainedResult = await cleanupAttemptWorktree(failed.repoPath, failed.worktreePath, false);
     expect(retainedResult).toEqual({ ok: true, removed: false });
     expect(existsSync(failed.worktreePath)).toBe(true);
-  });
+  }, 60000);
 
   it("returns ok:false when the base clone cannot be prepared, without attempting git worktree add", async () => {
     const root = tempRoot("loopover-miner-attempt-worktree-clonefail-");
@@ -111,6 +118,8 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
   });
 
   it("returns ok:false with git's real stderr when git worktree add fails (e.g. an unknown base branch)", async () => {
+    // Real git subprocess round trip (origin init + a real clone + a failing `git worktree add`). See the
+    // REGRESSION test above for why this needs an explicit timeout.
     const root = tempRoot("loopover-miner-attempt-worktree-addfail-");
     const originPath = initOriginRepo(root);
     const cloneBaseDir = join(root, "cache");
@@ -121,5 +130,5 @@ describe("prepareAttemptWorktree / cleanupAttemptWorktree (#5132)", () => {
     if (result.ok) throw new Error("expected failure");
     expect(result.repoPath).toBe(join(cloneBaseDir, "acme", "widgets"));
     expect(result.error).toBeTruthy();
-  });
+  }, 60000);
 });
