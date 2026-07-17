@@ -108,5 +108,41 @@ The profile is cached in a local SQLite store keyed by repo, mirroring the miner
 - **#6796 (extraction):** populates each `SignalRule` from labels + `CONTRIBUTING.md` (root and `.github/`) +
   PR template + agent docs, setting `confidence`/`provenance` per the findings above.
 - **#6797 (cache + doctor):** the `miner_contribution_profile` SQLite store with the TTL above.
-- **#6798 (`discover` wiring):** reads the profile's eligibility/exclusion rules and the runtime assignee check
-  to filter candidate issues, weighting each by its `confidence`.
+- **#6798 (`discover` wiring):** reads the profile's eligibility/exclusion rules to filter candidate issues —
+  see the section below for the landed behavior.
+
+## Discover eligibility filtering (#6798)
+
+`loopover-miner discover` now filters candidate issues through each target repo's `ContributionProfile` before
+ranking and enqueueing, so it no longer surfaces work a repo's own conventions would reject. The decision logic
+is `filterCandidatesByProfiles` (`contribution-profile-filter.js`), a pure partition of candidates into `kept`
+and `excluded` (each excluded entry carries a `reason`).
+
+**Safe-default posture — the load-bearing rule.** Filtering activates for a repo **only** when its profile has
+a trustworthy eligibility signal (`eligibilityLabels.confidence === "explicit"`). A repo with no profile, or a
+low-confidence / empty one — a repo whose conventions AMS simply couldn't read — keeps **every** candidate. A
+weak profile can never cause AMS to silently skip real, eligible work. On top of that, the default resolver
+does no profile work at all without a GitHub token (it can't read a taxonomy reliably unauthenticated), so the
+unauthenticated CLI path is byte-identical to before.
+
+**What gets excluded, once a repo is trusted** (matched against the candidate's own labels, by the eligibility/
+exclusion label _names_ the profile recorded in `provenance`):
+
+| Reason                      | Meaning                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------- |
+| `exclusion_label`           | the issue carries a label the profile marks maintainer-only / off-limits                    |
+| `missing_eligibility_label` | the repo has an eligibility convention and the issue carries none of its eligibility labels |
+| `conflicting_signals`       | the issue carries **both** an eligibility and an exclusion label — **exclusion wins**       |
+
+**Conflicting signals resolve conservatively:** an issue that is both eligibility-labelled and exclusion-labelled
+is excluded, because a maintainer marking it off-limits outranks its also being help-wanted — better to skip
+than to attempt work the repo's own gate would reject.
+
+**Assignee exclusion is not yet applied here.** The candidate objects that flow through `discover` carry label
+names but not assignees (`opportunity-fanout.js`'s `normalizeIssue` drops them), and `ContributionAssigneeRuntimeCheck`
+is deliberately a runtime concern rather than a profile field. Threading assignees through the fan-out is a
+follow-up; this PR scopes filtering to labels, which is the primary eligibility signal the #6794 inventory found.
+
+The excluded set (repo + issue + reason) is surfaced in both the `--json` output (`result.excluded`) and the
+plain-text summary (an `excluded (eligibility): N` block), so a human running `discover` sees exactly what AMS
+inferred and why each candidate was skipped.

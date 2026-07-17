@@ -39,7 +39,10 @@ export type DiscoverFanOutSummary = {
 };
 
 /** The subset of a ranked entry that `renderDiscoverSummary` reads for its top-candidates listing. */
-export type DiscoverRankedEntry = Pick<RankedCandidateIssue, "repoFullName" | "issueNumber" | "title" | "rankScore">;
+export type DiscoverRankedEntry = Pick<
+  RankedCandidateIssue,
+  "repoFullName" | "issueNumber" | "title" | "rankScore"
+>;
 
 export type DiscoverResult = {
   fanOutCount: number;
@@ -47,6 +50,12 @@ export type DiscoverResult = {
   rateLimitRemaining: number | null;
   rateLimitResetAt: string | null;
   ranked: DiscoverRankedEntry[];
+  /** Candidates the eligibility filter dropped, each with the repo/issue and the reason (#6798). */
+  excluded?: Array<{
+    repoFullName: string;
+    issueNumber: number;
+    reason: string;
+  }>;
   /** True when ranking fell back to the built-in default goal spec because no per-tenant spec was supplied (#4784). */
   usedDefaultGoalSpec?: boolean;
   enqueueSummary: EnqueueRankedDiscoverySummary;
@@ -89,7 +98,24 @@ export type RunDiscoverOptions = {
    *  to (never instead of) the plain exit-code return -- mirrors `RunAttemptOptions.onResult`. Never fires on a
    *  parse-error/unexpected-error `reportCliFailure` branch, matching runAttempt's own asymmetry (#6522). */
   onResult?: (result: DiscoverResult) => void;
+  /** Resolve each candidate repo's ContributionProfile for eligibility filtering (#6798). Defaults to
+   *  resolveContributionProfilesForDiscover; injectable so tests avoid the network. */
+  resolveContributionProfiles?: (
+    repoFullNames: string[],
+    ctx: { githubToken?: string; apiBaseUrl?: string; nowMs?: number },
+  ) => Promise<Map<string, unknown>>;
 };
+
+export function resolveContributionProfilesForDiscover(
+  repoFullNames: string[],
+  ctx?: {
+    githubToken?: string;
+    apiBaseUrl?: string;
+    nowMs?: number;
+    initCache?: unknown;
+    extract?: unknown;
+  },
+): Promise<Map<string, unknown>>;
 
 export function parseDiscoverArgs(args: string[]): ParsedDiscoverArgs;
 
@@ -97,4 +123,7 @@ export function sanitizeDiscoverDisplayText(value: unknown): string;
 
 export function renderDiscoverSummary(result: DiscoverResult): string;
 
-export function runDiscover(args: string[], options?: RunDiscoverOptions): Promise<number>;
+export function runDiscover(
+  args: string[],
+  options?: RunDiscoverOptions,
+): Promise<number>;

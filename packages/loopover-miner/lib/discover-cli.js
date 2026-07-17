@@ -11,6 +11,9 @@ import { initPolicyVerdictCacheStore } from "./policy-verdict-cache.js";
 import { enqueueRankedDiscovery } from "./portfolio-discovery.js";
 import { initPortfolioQueueStore } from "./portfolio-queue.js";
 import { initRankedCandidatesStore } from "./ranked-candidates.js";
+import { extractContributionProfile } from "./contribution-profile-extract.js";
+import { initContributionProfileCache } from "./contribution-profile-cache.js";
+import { filterCandidatesByProfiles } from "./contribution-profile-filter.js";
 import { argsWantJson, describeCliError, reportCliFailure } from "./cli-error.js";
 
 const DISCOVER_USAGE =
@@ -124,6 +127,14 @@ export function renderDiscoverSummary(result) {
   if (result.enqueueSummary.skippedBelowMinRank > 0) {
     lines.push(`skipped (below min rank): ${result.enqueueSummary.skippedBelowMinRank}`);
   }
+  // #6798: surface what the eligibility filter dropped and why, so a human sees AMS's inference.
+  const excluded = result.excluded ?? [];
+  if (excluded.length > 0) {
+    lines.push(`excluded (eligibility): ${excluded.length}`);
+    for (const entry of excluded.slice(0, 10)) {
+      lines.push(`  ${entry.repoFullName}#${entry.issueNumber}  ${entry.reason}`);
+    }
+  }
   // Make the fall-back to loopover's built-in rubric explicit instead of silent (#4784): when no per-tenant goal
   // spec is supplied, lane fit reflects loopover's defaults, not the target repo's own conventions.
   if (result.usedDefaultGoalSpec) {
@@ -141,6 +152,41 @@ export function renderDiscoverSummary(result) {
     lines.push(`  ${entry.repoFullName}#${entry.issueNumber}  score=${entry.rankScore.toFixed(4)}  ${title}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * Default per-repo ContributionProfile resolver (#6798): reads the local cache and, on a miss/stale entry,
+ * extracts a fresh profile and caches it. Returns a Map keyed by repoFullName.
+ *
+ * WITHOUT a github token this returns an empty map and does no network work at all — AMS can't reliably read a
+ * repo's label taxonomy/docs unauthenticated (rate limits), so it safe-defaults to no eligibility filtering.
+ * That also keeps callers that don't supply a token (the common CLI path, and every test) hermetic.
+ *
+ * @param {string[]} repoFullNames unique repos among the fanned-out candidates
+ * @param {{ githubToken?: string, apiBaseUrl?: string, nowMs?: number, initCache?: typeof initContributionProfileCache, extract?: typeof extractContributionProfile }} ctx
+ * @returns {Promise<Map<string, object>>}
+ */
+export async function resolveContributionProfilesForDiscover(repoFullNames, ctx = {}) {
+  const profiles = new Map();
+  if (!ctx.githubToken) return profiles;
+  const initCache = ctx.initCache ?? initContributionProfileCache;
+  const extract = ctx.extract ?? extractContributionProfile;
+  const cache = initCache();
+  try {
+    for (const repoFullName of repoFullNames) {
+      const cached = cache.get(repoFullName, ctx.nowMs);
+      if (cached && !cached.stale) {
+        profiles.set(repoFullName, cached.profile);
+        continue;
+      }
+      const profile = await extract(repoFullName, { githubToken: ctx.githubToken, apiBaseUrl: ctx.apiBaseUrl });
+      cache.put(profile, ctx.nowMs);
+      profiles.set(repoFullName, profile);
+    }
+  } finally {
+    cache.close();
+  }
+  return profiles;
 }
 
 export async function runDiscover(args, options = {}) {
@@ -162,6 +208,9 @@ export async function runDiscover(args, options = {}) {
   const searchTargets = options.searchCandidateIssuesWithSummary ?? searchCandidateIssuesWithSummary;
   const rankIssues = options.rankCandidateIssuesWithSummary ?? rankCandidateIssuesWithSummary;
   const enqueue = options.enqueueRankedDiscovery ?? enqueueRankedDiscovery;
+  // Eligibility filtering (#6798): resolve each candidate repo's ContributionProfile and drop candidates the
+  // repo's own conventions would reject, BEFORE ranking. Safe by default -- see resolveContributionProfilesForDiscover.
+  const resolveProfiles = options.resolveContributionProfiles ?? resolveContributionProfilesForDiscover;
 
   // #4847: fetch + rank are read-only GitHub GETs and pure local computation, so a dry run still does them for
   // real (that's the useful "what would this discover?" output) -- but it never opens any local store (portfolio
@@ -175,7 +224,12 @@ export async function runDiscover(args, options = {}) {
         parsed.search !== null
           ? await searchTargets(parsed.search, githubToken, fanOutOptions)
           : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
-      const rankedSummary = rankIssues(fanOut.issues, {
+      // #6798: same eligibility filter as the real path, so a dry run shows the exact candidate set a real run
+      // would enqueue (and the same excluded set), rather than an unfiltered preview.
+      const repoFullNames = [...new Set(fanOut.issues.map((issue) => issue.repoFullName))];
+      const profilesByRepo = await resolveProfiles(repoFullNames, { githubToken, apiBaseUrl, nowMs: options.nowMs });
+      const { kept, excluded } = filterCandidatesByProfiles(fanOut.issues, profilesByRepo);
+      const rankedSummary = rankIssues(kept, {
         nowMs: options.nowMs,
         goalSpecsByRepo: options.goalSpecsByRepo,
         goalSpecContentByRepo: options.goalSpecContentByRepo,
@@ -189,6 +243,11 @@ export async function runDiscover(args, options = {}) {
         rateLimitRemaining: fanOut.rateLimitRemaining,
         rateLimitResetAt: fanOut.rateLimitResetAt,
         ranked: rankedSummary.issues,
+        excluded: excluded.map((entry) => ({
+          repoFullName: entry.candidate.repoFullName,
+          issueNumber: entry.candidate.issueNumber,
+          reason: entry.reason,
+        })),
         usedDefaultGoalSpec: rankedSummary.usedDefaultGoalSpec,
         enqueueSummary,
       };
@@ -268,10 +327,17 @@ export async function runDiscover(args, options = {}) {
         ? await searchTargets(parsed.search, githubToken, fanOutOptions)
         : await fetchTargets(parsed.targets, githubToken, fanOutOptions);
 
+    // Eligibility filter (#6798): drop candidates a target repo's own conventions would reject, before ranking.
+    // A repo with no trustworthy eligibility profile keeps every candidate (filterCandidatesByProfiles' safe
+    // default), so this never silently skips real work on a repo whose conventions AMS couldn't read.
+    const repoFullNames = [...new Set(fanOut.issues.map((issue) => issue.repoFullName))];
+    const profilesByRepo = await resolveProfiles(repoFullNames, { githubToken, apiBaseUrl, nowMs: options.nowMs });
+    const { kept, excluded } = filterCandidatesByProfiles(fanOut.issues, profilesByRepo);
+
     // Pass any caller-supplied per-tenant goal specs through to the ranker so lane fit uses the tenant's
     // conventions instead of silently falling back to loopover's defaults (#4784); the fallback is surfaced via
     // `usedDefaultGoalSpec` below rather than hidden.
-    const rankedSummary = rankIssues(fanOut.issues, {
+    const rankedSummary = rankIssues(kept, {
       nowMs: options.nowMs,
       goalSpecsByRepo: options.goalSpecsByRepo,
       goalSpecContentByRepo: options.goalSpecContentByRepo,
@@ -294,6 +360,13 @@ export async function runDiscover(args, options = {}) {
       rateLimitRemaining: fanOut.rateLimitRemaining,
       rateLimitResetAt: fanOut.rateLimitResetAt,
       ranked: rankedSummary.issues,
+      // #6798: candidates the eligibility filter dropped, each with the repo + issue + reason, so a human sees
+      // what AMS inferred and why a candidate was skipped. Empty when no profile was trustworthy enough to filter.
+      excluded: excluded.map((entry) => ({
+        repoFullName: entry.candidate.repoFullName,
+        issueNumber: entry.candidate.issueNumber,
+        reason: entry.reason,
+      })),
       usedDefaultGoalSpec: rankedSummary.usedDefaultGoalSpec,
       enqueueSummary,
     };

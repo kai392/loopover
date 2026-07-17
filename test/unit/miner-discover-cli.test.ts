@@ -45,7 +45,9 @@ function tempPolicyDocCacheStore() {
 function tempPolicyVerdictCacheStore() {
   const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pvc-"));
   roots.push(root);
-  const store = initPolicyVerdictCacheStore(join(root, "policy-verdict-cache.sqlite3"));
+  const store = initPolicyVerdictCacheStore(
+    join(root, "policy-verdict-cache.sqlite3"),
+  );
   stores.push(store);
   return store;
 }
@@ -54,7 +56,9 @@ function tempPolicyVerdictCacheStore() {
 function tempRankedCandidatesStore() {
   const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-rc-"));
   roots.push(root);
-  const store = initRankedCandidatesStore(join(root, "ranked-candidates.sqlite3"));
+  const store = initRankedCandidatesStore(
+    join(root, "ranked-candidates.sqlite3"),
+  );
   stores.push(store);
   return store;
 }
@@ -81,7 +85,8 @@ afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   closeDefaultPortfolioQueueStore();
   vi.restoreAllMocks();
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0))
+    rmSync(root, { recursive: true, force: true });
 });
 
 describe("parseDiscoverArgs (#4247)", () => {
@@ -92,7 +97,9 @@ describe("parseDiscoverArgs (#4247)", () => {
   });
 
   it("parses one or more owner/repo targets plus --json", () => {
-    expect(parseDiscoverArgs(["acme/widgets", "acme/gadgets", "--json"])).toEqual({
+    expect(
+      parseDiscoverArgs(["acme/widgets", "acme/gadgets", "--json"]),
+    ).toEqual({
       targets: [
         { owner: "acme", repo: "widgets" },
         { owner: "acme", repo: "gadgets" },
@@ -177,13 +184,17 @@ describe("parseDiscoverArgs (#4247)", () => {
     expect(parseDiscoverArgs(["acme/widgets", "--api-base-url"])).toEqual({
       error: expect.stringContaining("Usage: loopover-miner discover"),
     });
-    expect(parseDiscoverArgs(["acme/widgets", "--api-base-url", "--json"])).toEqual({
+    expect(
+      parseDiscoverArgs(["acme/widgets", "--api-base-url", "--json"]),
+    ).toEqual({
       error: expect.stringContaining("Usage: loopover-miner discover"),
     });
     expect(parseDiscoverArgs(["acme/widgets", "--token-env"])).toEqual({
       error: expect.stringContaining("Usage: loopover-miner discover"),
     });
-    expect(parseDiscoverArgs(["acme/widgets", "--token-env", "--json"])).toEqual({
+    expect(
+      parseDiscoverArgs(["acme/widgets", "--token-env", "--json"]),
+    ).toEqual({
       error: expect.stringContaining("Usage: loopover-miner discover"),
     });
   });
@@ -193,20 +204,43 @@ describe("renderDiscoverSummary (#4247)", () => {
   it("summarizes fan-out, ranking, and enqueue counts with top candidates", () => {
     const text = renderDiscoverSummary({
       fanOutCount: 2,
-      warnings: [{ repoFullName: "acme/banned", stage: "policy:AI-USAGE.md", message: "denied" }],
+      warnings: [
+        {
+          repoFullName: "acme/banned",
+          stage: "policy:AI-USAGE.md",
+          message: "denied",
+        },
+      ],
       rateLimitRemaining: 4993,
       rateLimitResetAt: "2026-07-09T13:00:00.000Z",
       ranked: [
-        { repoFullName: "acme/widgets", issueNumber: 1, title: "Add retry helper", rankScore: 0.8 },
-        { repoFullName: "acme/widgets", issueNumber: 2, title: "Fix flaky test", rankScore: 0.4 },
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 1,
+          title: "Add retry helper",
+          rankScore: 0.8,
+        },
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 2,
+          title: "Fix flaky test",
+          rankScore: 0.4,
+        },
       ],
-      enqueueSummary: { enqueued: 2, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 2,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
     expect(text).toContain("fanned out: 2 candidate issue(s)");
     expect(text).toContain("ai-policy warnings: 1");
     expect(text).toContain("ranked: 2");
     expect(text).toContain("enqueued: 2");
-    expect(text).toContain("rate-limit remaining: 4993 (resets 2026-07-09T13:00:00.000Z)");
+    expect(text).toContain(
+      "rate-limit remaining: 4993 (resets 2026-07-09T13:00:00.000Z)",
+    );
     expect(text).toContain("acme/widgets#1  score=0.8000  Add retry helper");
     expect(text).not.toContain("skipped (below min rank)");
   });
@@ -226,19 +260,28 @@ describe("renderDiscoverSummary (#4247)", () => {
           rankScore: 0.8,
         },
       ],
-      enqueueSummary: { enqueued: 1, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 1,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
 
     expect(text).toContain("normal SPOOFED: enqueued: 999 red CLICK codexe");
     expect(text).not.toContain("\u001b");
     expect(text).not.toContain("\u0007");
     expect(text).not.toContain("\u202e");
-    expect(text.split("\n").filter((line) => line.includes("SPOOFED"))).toHaveLength(1);
+    expect(
+      text.split("\n").filter((line) => line.includes("SPOOFED")),
+    ).toHaveLength(1);
   });
 
   it("bounds sanitized title display text and handles nullish values", () => {
     expect(sanitizeDiscoverDisplayText(null)).toBe("");
-    expect(sanitizeDiscoverDisplayText(`safe ${"x".repeat(300)}`)).toHaveLength(240);
+    expect(sanitizeDiscoverDisplayText(`safe ${"x".repeat(300)}`)).toHaveLength(
+      240,
+    );
   });
 
   it("reports skipped-below-min-rank counts and an empty-result message", () => {
@@ -247,8 +290,20 @@ describe("renderDiscoverSummary (#4247)", () => {
       warnings: [],
       rateLimitRemaining: null,
       rateLimitResetAt: null,
-      ranked: [{ repoFullName: "acme/widgets", issueNumber: 1, title: "x", rankScore: 0.1 }],
-      enqueueSummary: { enqueued: 0, skippedBelowMinRank: 1, skippedInvalid: 0, eventsAppended: 0 },
+      ranked: [
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 1,
+          title: "x",
+          rankScore: 0.1,
+        },
+      ],
+      enqueueSummary: {
+        enqueued: 0,
+        skippedBelowMinRank: 1,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
     expect(withSkips).toContain("skipped (below min rank): 1");
 
@@ -258,7 +313,12 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitRemaining: null,
       rateLimitResetAt: null,
       ranked: [],
-      enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 0,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
     expect(empty).toContain("no candidates found.");
     // Without the flag the fall-back note is absent (the default-goal-spec branch is opt-in on the result).
@@ -271,9 +331,21 @@ describe("renderDiscoverSummary (#4247)", () => {
       warnings: [],
       rateLimitRemaining: null,
       rateLimitResetAt: null,
-      ranked: [{ repoFullName: "acme/widgets", issueNumber: 1, title: "x", rankScore: 0.8 }],
+      ranked: [
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 1,
+          title: "x",
+          rankScore: 0.8,
+        },
+      ],
       usedDefaultGoalSpec: true,
-      enqueueSummary: { enqueued: 1, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 1,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
     expect(text).toContain("ranked with the built-in default goal spec");
   });
@@ -285,9 +357,16 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitRemaining: 12,
       rateLimitResetAt: "2026-07-09T13:30:00.000Z",
       ranked: [],
-      enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 0,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
-    expect(withTelemetry).toContain("rate-limit remaining: 12 (resets 2026-07-09T13:30:00.000Z)");
+    expect(withTelemetry).toContain(
+      "rate-limit remaining: 12 (resets 2026-07-09T13:30:00.000Z)",
+    );
 
     // A remaining count of zero must still print the number, not fall through to "unknown".
     const throttled = renderDiscoverSummary({
@@ -296,7 +375,12 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitRemaining: 0,
       rateLimitResetAt: null,
       ranked: [],
-      enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 0,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
     expect(throttled).toContain("rate-limit remaining: 0");
     expect(throttled).not.toContain("resets");
@@ -307,7 +391,12 @@ describe("renderDiscoverSummary (#4247)", () => {
       rateLimitRemaining: null,
       rateLimitResetAt: null,
       ranked: [],
-      enqueueSummary: { enqueued: 0, skippedBelowMinRank: 0, skippedInvalid: 0, eventsAppended: 0 },
+      enqueueSummary: {
+        enqueued: 0,
+        skippedBelowMinRank: 0,
+        skippedInvalid: 0,
+        eventsAppended: 0,
+      },
     });
     expect(noTelemetry).toContain("rate-limit remaining: unknown");
   });
@@ -318,8 +407,16 @@ describe("runDiscover (#4247)", () => {
     const portfolioQueue = tempQueueStore();
     const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
       issues: [
-        fanOutIssue({ issueNumber: 1, title: "Add retry helper", labels: ["help wanted", "feature"] }),
-        fanOutIssue({ issueNumber: 2, title: "Fix flaky test", labels: ["help wanted"] }),
+        fanOutIssue({
+          issueNumber: 1,
+          title: "Add retry helper",
+          labels: ["help wanted", "feature"],
+        }),
+        fanOutIssue({
+          issueNumber: 2,
+          title: "Fix flaky test",
+          labels: ["help wanted"],
+        }),
       ],
       warnings: [],
       rateLimitRemaining: 4987,
@@ -351,13 +448,18 @@ describe("runDiscover (#4247)", () => {
     const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
     expect(payload.fanOutCount).toBe(2);
     expect(payload.enqueueSummary.enqueued).toBe(2);
-    expect(payload.ranked.map((entry: { issueNumber: number }) => entry.issueNumber)).toEqual([1, 2]);
+    expect(
+      payload.ranked.map((entry: { issueNumber: number }) => entry.issueNumber),
+    ).toEqual([1, 2]);
     // The fanout's rate-limit telemetry is surfaced verbatim in --json output (#4837).
     expect(payload.rateLimitRemaining).toBe(4987);
     expect(payload.rateLimitResetAt).toBe("2026-07-09T13:00:00.000Z");
 
     const queued = portfolioQueue.listQueue("acme/widgets");
-    expect(queued.map((entry) => entry.identifier).sort()).toEqual(["issue:1", "issue:2"]);
+    expect(queued.map((entry) => entry.identifier).sort()).toEqual([
+      "issue:1",
+      "issue:2",
+    ]);
   });
 
   it("#4847: --dry-run performs the real fan-out/rank but never opens any local store", async () => {
@@ -365,25 +467,33 @@ describe("runDiscover (#4247)", () => {
     const initPolicyDocCache = vi.fn();
     const initPolicyVerdictCache = vi.fn();
     const initRankedCandidatesStore = vi.fn();
-    const fetchCandidateIssuesWithSummary = vi.fn(async (targets, token, fanOutOptions) => {
-      expect(fanOutOptions).toMatchObject({ policyDocCache: null, policyVerdictCache: null });
-      return {
-        issues: [fanOutIssue({ issueNumber: 1, title: "Add retry helper" })],
-        warnings: [],
-        rateLimitRemaining: 4990,
-        rateLimitResetAt: "2026-07-09T13:00:00.000Z",
-      };
-    });
+    const fetchCandidateIssuesWithSummary = vi.fn(
+      async (targets, token, fanOutOptions) => {
+        expect(fanOutOptions).toMatchObject({
+          policyDocCache: null,
+          policyVerdictCache: null,
+        });
+        return {
+          issues: [fanOutIssue({ issueNumber: 1, title: "Add retry helper" })],
+          warnings: [],
+          rateLimitRemaining: 4990,
+          rateLimitResetAt: "2026-07-09T13:00:00.000Z",
+        };
+      },
+    );
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const exitCode = await runDiscover(["acme/widgets", "--dry-run", "--json"], {
-      nowMs: NOW,
-      initPortfolioQueue,
-      initPolicyDocCache,
-      initPolicyVerdictCache,
-      initRankedCandidatesStore,
-      fetchCandidateIssuesWithSummary,
-    });
+    const exitCode = await runDiscover(
+      ["acme/widgets", "--dry-run", "--json"],
+      {
+        nowMs: NOW,
+        initPortfolioQueue,
+        initPolicyDocCache,
+        initPolicyVerdictCache,
+        initRankedCandidatesStore,
+        fetchCandidateIssuesWithSummary,
+      },
+    );
 
     expect(exitCode).toBe(0);
     expect(initPortfolioQueue).not.toHaveBeenCalled();
@@ -394,7 +504,9 @@ describe("runDiscover (#4247)", () => {
     expect(payload.outcome).toBe("dry_run");
     expect(payload.fanOutCount).toBe(1);
     expect(payload.enqueueSummary.enqueued).toBe(1);
-    expect(payload.ranked.map((entry: { issueNumber: number }) => entry.issueNumber)).toEqual([1]);
+    expect(
+      payload.ranked.map((entry: { issueNumber: number }) => entry.issueNumber),
+    ).toEqual([1]);
 
     log.mockClear();
     const textExitCode = await runDiscover(["acme/widgets", "--dry-run"], {
@@ -406,7 +518,9 @@ describe("runDiscover (#4247)", () => {
       fetchCandidateIssuesWithSummary,
     });
     expect(textExitCode).toBe(0);
-    expect(String(log.mock.calls[1]?.[0])).toContain("DRY RUN: no portfolio-queue write was made.");
+    expect(String(log.mock.calls[1]?.[0])).toContain(
+      "DRY RUN: no portfolio-queue write was made.",
+    );
   });
 
   it("#4847: --dry-run reports fan-out failures and exits non-zero without opening any local store", async () => {
@@ -414,7 +528,9 @@ describe("runDiscover (#4247)", () => {
     const fetchCandidateIssuesWithSummary = vi.fn(async () => {
       throw new Error("github_unreachable");
     });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
     const exitCode = await runDiscover(["acme/widgets", "--dry-run"], {
       nowMs: NOW,
@@ -434,11 +550,14 @@ describe("runDiscover (#4247)", () => {
     });
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const exitCode = await runDiscover(["acme/widgets", "--dry-run", "--json"], {
-      nowMs: NOW,
-      initPortfolioQueue,
-      fetchCandidateIssuesWithSummary,
-    });
+    const exitCode = await runDiscover(
+      ["acme/widgets", "--dry-run", "--json"],
+      {
+        nowMs: NOW,
+        initPortfolioQueue,
+        fetchCandidateIssuesWithSummary,
+      },
+    );
 
     expect(exitCode).toBe(2);
     expect(initPortfolioQueue).not.toHaveBeenCalled();
@@ -450,9 +569,14 @@ describe("runDiscover (#4247)", () => {
     const fetchCandidateIssuesWithSummary = vi.fn(async () => {
       throw "raw_string_fault";
     });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
-    const exitCode = await runDiscover(["acme/widgets", "--dry-run"], { nowMs: NOW, fetchCandidateIssuesWithSummary });
+    const exitCode = await runDiscover(["acme/widgets", "--dry-run"], {
+      nowMs: NOW,
+      fetchCandidateIssuesWithSummary,
+    });
 
     expect(exitCode).toBe(2);
     expect(error).toHaveBeenCalledWith("raw_string_fault");
@@ -471,12 +595,15 @@ describe("runDiscover (#4247)", () => {
     });
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const exitCode = await runDiscover(["--search", "label:bug", "--dry-run", "--json"], {
-      nowMs: NOW,
-      initPortfolioQueue,
-      searchCandidateIssuesWithSummary,
-      fetchCandidateIssuesWithSummary,
-    });
+    const exitCode = await runDiscover(
+      ["--search", "label:bug", "--dry-run", "--json"],
+      {
+        nowMs: NOW,
+        initPortfolioQueue,
+        searchCandidateIssuesWithSummary,
+        fetchCandidateIssuesWithSummary,
+      },
+    );
 
     expect(exitCode).toBe(0);
     expect(initPortfolioQueue).not.toHaveBeenCalled();
@@ -510,7 +637,11 @@ describe("runDiscover (#4247)", () => {
     });
 
     expect(exitCode).toBe(0);
-    expect(searchCandidateIssuesWithSummary).toHaveBeenCalledWith("label:bug", "", expect.objectContaining({}));
+    expect(searchCandidateIssuesWithSummary).toHaveBeenCalledWith(
+      "label:bug",
+      "",
+      expect.objectContaining({}),
+    );
     expect(fetchCandidateIssuesWithSummary).not.toHaveBeenCalled();
     expect(String(log.mock.calls[0]?.[0])).toContain("Result for label:bug");
   });
@@ -537,7 +668,9 @@ describe("runDiscover (#4247)", () => {
     expect(exitCode).toBe(0);
     const text = String(log.mock.calls[0]?.[0]);
     expect(text).toContain("fanned out: 1 candidate issue(s)");
-    expect(text).toContain("rate-limit remaining: 3200 (resets 2026-07-09T13:00:00.000Z)");
+    expect(text).toContain(
+      "rate-limit remaining: 3200 (resets 2026-07-09T13:00:00.000Z)",
+    );
     expect(text).toContain("top candidates:");
   });
 
@@ -545,17 +678,23 @@ describe("runDiscover (#4247)", () => {
     const initPortfolioQueue = vi.fn(() => {
       throw new Error("must not open the queue on a parse error");
     });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
     const exitCode = await runDiscover(["not-a-repo"], { initPortfolioQueue });
     expect(exitCode).toBe(2);
     expect(initPortfolioQueue).not.toHaveBeenCalled();
-    expect(error).toHaveBeenCalledWith("Repository must be in owner/repo form: not-a-repo");
+    expect(error).toHaveBeenCalledWith(
+      "Repository must be in owner/repo form: not-a-repo",
+    );
   });
 
   it("emits JSON when portfolio queue open fails with --json (#4836)", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     const exitCode = await runDiscover(["acme/widgets", "--json"], {
       initPortfolioQueue: () => {
         throw new Error("portfolio_db_locked");
@@ -574,7 +713,9 @@ describe("runDiscover (#4247)", () => {
     const fetchCandidateIssuesWithSummary = vi.fn(async () => {
       throw new Error("github_unreachable");
     });
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const error = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
 
     const exitCode = await runDiscover(["acme/widgets"], {
       initPortfolioQueue: () => portfolioQueue,
@@ -589,7 +730,9 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk portfolio queue when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-default-"));
+    const root = mkdtempSync(
+      join(tmpdir(), "loopover-miner-discover-cli-default-"),
+    );
     roots.push(root);
     const dbPath = join(root, "portfolio-queue.sqlite3");
     const previousDbPath = process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB;
@@ -616,9 +759,12 @@ describe("runDiscover (#4247)", () => {
       // the same file confirms the enqueue was actually persisted through the default code path.
       const reopened = initPortfolioQueueStore(dbPath);
       stores.push(reopened);
-      expect(reopened.listQueue().map((entry) => entry.identifier)).toEqual(["issue:5"]);
+      expect(reopened.listQueue().map((entry) => entry.identifier)).toEqual([
+        "issue:5",
+      ]);
     } finally {
-      if (previousDbPath === undefined) delete process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB;
+      if (previousDbPath === undefined)
+        delete process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB;
       else process.env.LOOPOVER_MINER_PORTFOLIO_QUEUE_DB = previousDbPath;
     }
   });
@@ -637,7 +783,13 @@ describe("runDiscover (#4247)", () => {
       vi.spyOn(console, "log").mockImplementation(() => undefined);
 
       const exitCode = await runDiscover(
-        ["acme/widgets", "--api-base-url", "https://ghe.example.com/api/v3", "--token-env", "FORGE_PAT"],
+        [
+          "acme/widgets",
+          "--api-base-url",
+          "https://ghe.example.com/api/v3",
+          "--token-env",
+          "FORGE_PAT",
+        ],
         {
           nowMs: NOW,
           initPortfolioQueue: () => portfolioQueue,
@@ -652,12 +804,16 @@ describe("runDiscover (#4247)", () => {
       expect(fetchCandidateIssuesWithSummary).toHaveBeenCalledWith(
         [{ owner: "acme", repo: "widgets" }],
         "tenant-secret",
-        expect.objectContaining({ apiBaseUrl: "https://ghe.example.com/api/v3" }),
+        expect.objectContaining({
+          apiBaseUrl: "https://ghe.example.com/api/v3",
+        }),
       );
       // REGRESSION (#5563): the enqueued portfolio-queue row itself carries the resolved forge host, not just
       // the fan-out call — otherwise a same-named repo on github.com would collide with this GHE tenant's row.
       expect(portfolioQueue.listQueue()).toEqual([
-        expect.objectContaining({ apiBaseUrl: "https://ghe.example.com/api/v3" }),
+        expect.objectContaining({
+          apiBaseUrl: "https://ghe.example.com/api/v3",
+        }),
       ]);
     } finally {
       if (previous === undefined) delete process.env.FORGE_PAT;
@@ -720,13 +876,17 @@ describe("runDiscover (#4247)", () => {
       githubToken: "explicit-token",
       apiBaseUrl: "https://programmatic.example.com",
       tokenEnv: "IGNORED_BECAUSE_TOKEN_IS_EXPLICIT",
+      // A token is set, so the default profile resolver would otherwise reach the network — no-op it (#6798).
+      resolveContributionProfiles: async () => new Map(),
     });
 
     expect(exitCode).toBe(0);
     expect(fetchCandidateIssuesWithSummary).toHaveBeenCalledWith(
       [{ owner: "acme", repo: "widgets" }],
       "explicit-token",
-      expect.objectContaining({ apiBaseUrl: "https://programmatic.example.com" }),
+      expect.objectContaining({
+        apiBaseUrl: "https://programmatic.example.com",
+      }),
     );
   });
 
@@ -778,7 +938,9 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk policy-doc cache when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pdc-default-"));
+    const root = mkdtempSync(
+      join(tmpdir(), "loopover-miner-discover-cli-pdc-default-"),
+    );
     roots.push(root);
     const cacheDbPath = join(root, "policy-doc-cache.sqlite3");
     const previousCacheDbPath = process.env.LOOPOVER_MINER_POLICY_DOC_CACHE_DB;
@@ -807,9 +969,14 @@ describe("runDiscover (#4247)", () => {
 
       const reopened = initPolicyDocCacheStore(cacheDbPath);
       stores.push(reopened);
-      expect(reopened.get("https://api.github.com/repos/acme/widgets/contents/AI-USAGE.md")).toBeNull();
+      expect(
+        reopened.get(
+          "https://api.github.com/repos/acme/widgets/contents/AI-USAGE.md",
+        ),
+      ).toBeNull();
     } finally {
-      if (previousCacheDbPath === undefined) delete process.env.LOOPOVER_MINER_POLICY_DOC_CACHE_DB;
+      if (previousCacheDbPath === undefined)
+        delete process.env.LOOPOVER_MINER_POLICY_DOC_CACHE_DB;
       else process.env.LOOPOVER_MINER_POLICY_DOC_CACHE_DB = previousCacheDbPath;
     }
   });
@@ -848,10 +1015,13 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk policy-verdict cache when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-pvc-default-"));
+    const root = mkdtempSync(
+      join(tmpdir(), "loopover-miner-discover-cli-pvc-default-"),
+    );
     roots.push(root);
     const cacheDbPath = join(root, "policy-verdict-cache.sqlite3");
-    const previousCacheDbPath = process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB;
+    const previousCacheDbPath =
+      process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB;
     process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = cacheDbPath;
     try {
       const portfolioQueue = tempQueueStore();
@@ -879,8 +1049,11 @@ describe("runDiscover (#4247)", () => {
       stores.push(reopened);
       expect(reopened.get("acme/widgets")).toBeNull();
     } finally {
-      if (previousCacheDbPath === undefined) delete process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB;
-      else process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = previousCacheDbPath;
+      if (previousCacheDbPath === undefined)
+        delete process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB;
+      else
+        process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB =
+          previousCacheDbPath;
     }
   });
 
@@ -943,7 +1116,9 @@ describe("runDiscover (#4247)", () => {
     expect(exitCode).toBe(0);
     const snapshot = rankedCandidatesStore.listRankedCandidates();
     expect(snapshot.map((entry) => entry.issueNumber).sort()).toEqual([1, 2]);
-    expect(snapshot.every((entry) => entry.rankedAt === new Date(NOW).toISOString())).toBe(true);
+    expect(
+      snapshot.every((entry) => entry.rankedAt === new Date(NOW).toISOString()),
+    ).toBe(true);
     // Every field opportunity-badge.js's badge needs must survive the round trip, not just rankScore.
     expect(snapshot[0]).toMatchObject({
       repoFullName: "acme/widgets",
@@ -958,7 +1133,9 @@ describe("runDiscover (#4247)", () => {
   });
 
   it("opens and closes the default on-disk ranked-candidates store when no override is supplied", async () => {
-    const root = mkdtempSync(join(tmpdir(), "loopover-miner-discover-cli-rc-default-"));
+    const root = mkdtempSync(
+      join(tmpdir(), "loopover-miner-discover-cli-rc-default-"),
+    );
     roots.push(root);
     const rankedCandidatesDbPath = join(root, "ranked-candidates.sqlite3");
     const previousDbPath = process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB;
@@ -989,7 +1166,8 @@ describe("runDiscover (#4247)", () => {
       stores.push(reopened);
       expect(reopened.listRankedCandidates()).toHaveLength(1);
     } finally {
-      if (previousDbPath === undefined) delete process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB;
+      if (previousDbPath === undefined)
+        delete process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB;
       else process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB = previousDbPath;
     }
   });
@@ -1070,7 +1248,13 @@ describe("runDiscover onResult hook (#6522)", () => {
   it("fires options.onResult with the structured result at the full-run success point, alongside exit 0", async () => {
     const portfolioQueue = tempQueueStore();
     const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
-      issues: [fanOutIssue({ issueNumber: 1, title: "Add retry helper", labels: ["help wanted", "feature"] })],
+      issues: [
+        fanOutIssue({
+          issueNumber: 1,
+          title: "Add retry helper",
+          labels: ["help wanted", "feature"],
+        }),
+      ],
       warnings: [],
       rateLimitRemaining: 4987,
       rateLimitResetAt: "2026-07-09T13:00:00.000Z",
@@ -1091,7 +1275,10 @@ describe("runDiscover onResult hook (#6522)", () => {
     expect(exitCode).toBe(0); // additive: the exit code is unchanged by the hook
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith(
-      expect.objectContaining({ fanOutCount: 1, enqueueSummary: expect.objectContaining({ enqueued: 1 }) }),
+      expect.objectContaining({
+        fanOutCount: 1,
+        enqueueSummary: expect.objectContaining({ enqueued: 1 }),
+      }),
     );
   });
 
@@ -1113,7 +1300,9 @@ describe("runDiscover onResult hook (#6522)", () => {
 
     expect(exitCode).toBe(0);
     expect(onResult).toHaveBeenCalledTimes(1);
-    expect(onResult).toHaveBeenCalledWith(expect.objectContaining({ outcome: "dry_run", fanOutCount: 1 }));
+    expect(onResult).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "dry_run", fanOutCount: 1 }),
+    );
   });
 
   it("REGRESSION: onResult never fires on the parse-error reportCliFailure branch, and the non-zero exit is unchanged", async () => {
@@ -1124,5 +1313,243 @@ describe("runDiscover onResult hook (#6522)", () => {
 
     expect(exitCode).not.toBe(0);
     expect(onResult).not.toHaveBeenCalled();
+  });
+
+  describe("eligibility filtering (#6798)", () => {
+    const trustworthyProfile = {
+      repoFullName: "acme/widgets",
+      schemaVersion: 1,
+      generatedAt: "2026-07-18T00:00:00.000Z",
+      eligibilityLabels: {
+        value: [{ field: "name", contains: "help wanted" }],
+        confidence: "explicit",
+        provenance: [{ source: "labels", detail: "help wanted" }],
+      },
+      exclusionLabels: {
+        value: [{ field: "name", contains: "blocked" }],
+        confidence: "inferred",
+        provenance: [{ source: "labels", detail: "blocked" }],
+      },
+      prBody: { value: null, confidence: "absent", provenance: [] },
+      completeness: "inferred",
+    };
+
+    function discoverWith(
+      issues: ReturnType<typeof fanOutIssue>[],
+      profilesByRepo: Map<string, unknown> | null,
+    ) {
+      const portfolioQueue = tempQueueStore();
+      const fetchCandidateIssuesWithSummary = vi.fn(async () => ({
+        issues,
+        warnings: [],
+        rateLimitRemaining: null,
+        rateLimitResetAt: null,
+      }));
+      return {
+        portfolioQueue,
+        fetchCandidateIssuesWithSummary,
+        opts: {
+          nowMs: NOW,
+          initPortfolioQueue: () => portfolioQueue,
+          initPolicyDocCache: () => tempPolicyDocCacheStore(),
+          initPolicyVerdictCache: () => tempPolicyVerdictCacheStore(),
+          initRankedCandidatesStore: () => tempRankedCandidatesStore(),
+          fetchCandidateIssuesWithSummary,
+          resolveContributionProfiles: async () => profilesByRepo ?? new Map(),
+        },
+      };
+    }
+
+    it("excludes maintainer-only-equivalent issues, enqueuing only the eligible ones", async () => {
+      const issues = [
+        fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }), // eligible
+        fanOutIssue({ issueNumber: 2, labels: ["blocked"] }), // exclusion label
+        fanOutIssue({ issueNumber: 3, labels: ["bug"] }), // missing eligibility
+      ];
+      const { portfolioQueue, opts } = discoverWith(
+        issues,
+        new Map([["acme/widgets", trustworthyProfile]]),
+      );
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const exitCode = await runDiscover(["acme/widgets", "--json"], opts);
+      expect(exitCode).toBe(0);
+
+      const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(
+        payload.ranked.map((e: { issueNumber: number }) => e.issueNumber),
+      ).toEqual([1]);
+      expect(payload.excluded).toEqual([
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 2,
+          reason: "exclusion_label",
+        },
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 3,
+          reason: "missing_eligibility_label",
+        },
+      ]);
+      // Only the eligible issue is actually enqueued.
+      expect(
+        portfolioQueue.listQueue("acme/widgets").map((e) => e.identifier),
+      ).toEqual(["issue:1"]);
+    });
+
+    it("SAFE DEFAULT: filters nothing for a low-confidence/empty profile", async () => {
+      const emptyProfile = {
+        ...trustworthyProfile,
+        eligibilityLabels: {
+          value: null,
+          confidence: "absent",
+          provenance: [],
+        },
+      };
+      const issues = [
+        fanOutIssue({ issueNumber: 1, labels: ["bug"] }),
+        fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+      ];
+      const { opts } = discoverWith(
+        issues,
+        new Map([["acme/widgets", emptyProfile]]),
+      );
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await runDiscover(["acme/widgets", "--json"], opts);
+
+      const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+      // Nothing excluded — a repo whose conventions AMS couldn't read never has real work silently skipped.
+      expect(payload.excluded).toEqual([]);
+      expect(
+        payload.ranked
+          .map((e: { issueNumber: number }) => e.issueNumber)
+          .sort(),
+      ).toEqual([1, 2]);
+    });
+
+    it("resolves conflicting eligibility+exclusion signals conservatively (exclusion wins)", async () => {
+      const issues = [
+        fanOutIssue({ issueNumber: 1, labels: ["help wanted", "blocked"] }),
+      ];
+      const { opts } = discoverWith(
+        issues,
+        new Map([["acme/widgets", trustworthyProfile]]),
+      );
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await runDiscover(["acme/widgets", "--json"], opts);
+
+      const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(payload.ranked).toEqual([]);
+      expect(payload.excluded).toEqual([
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 1,
+          reason: "conflicting_signals",
+        },
+      ]);
+    });
+
+    it("surfaces the excluded set in plain-text output too", async () => {
+      const issues = [
+        fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }),
+        fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+      ];
+      const { opts } = discoverWith(
+        issues,
+        new Map([["acme/widgets", trustworthyProfile]]),
+      );
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await runDiscover(["acme/widgets"], opts);
+      expect(String(log.mock.calls[0]?.[0])).toMatch(
+        /excluded \(eligibility\): 1\n {2}acme\/widgets#2 {2}exclusion_label/,
+      );
+    });
+
+    it("applies the same eligibility filter on a --dry-run, surfacing the excluded set without enqueueing", async () => {
+      const issues = [
+        fanOutIssue({ issueNumber: 1, labels: ["help wanted"] }),
+        fanOutIssue({ issueNumber: 2, labels: ["blocked"] }),
+      ];
+      const { portfolioQueue, opts } = discoverWith(
+        issues,
+        new Map([["acme/widgets", trustworthyProfile]]),
+      );
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      await runDiscover(["acme/widgets", "--dry-run", "--json"], opts);
+
+      const payload = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(payload.outcome).toBe("dry_run");
+      expect(
+        payload.ranked.map((e: { issueNumber: number }) => e.issueNumber),
+      ).toEqual([1]);
+      expect(payload.excluded).toEqual([
+        {
+          repoFullName: "acme/widgets",
+          issueNumber: 2,
+          reason: "exclusion_label",
+        },
+      ]);
+      // Dry run writes nothing to the real queue.
+      expect(portfolioQueue.listQueue("acme/widgets")).toEqual([]);
+    });
+
+    it("the default resolver returns an empty map (no filtering, no network) when no token is set", async () => {
+      const { resolveContributionProfilesForDiscover } =
+        await import("../../packages/loopover-miner/lib/discover-cli.js");
+      const fetchImpl = vi.fn();
+      const profiles = await resolveContributionProfilesForDiscover(
+        ["acme/widgets"],
+        { githubToken: "", extract: fetchImpl as never },
+      );
+      expect(profiles.size).toBe(0);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("the default resolver reads the cache and extracts on a miss when a token is present", async () => {
+      const { resolveContributionProfilesForDiscover } =
+        await import("../../packages/loopover-miner/lib/discover-cli.js");
+      const cache = { get: vi.fn(() => null), put: vi.fn(), close: vi.fn() };
+      const extract = vi.fn(async (repoFullName: string) => ({
+        ...trustworthyProfile,
+        repoFullName,
+      }));
+      const profiles = await resolveContributionProfilesForDiscover(
+        ["acme/widgets"],
+        {
+          githubToken: "tok",
+          initCache: (() => cache) as never,
+          extract: extract as never,
+        },
+      );
+      expect(extract).toHaveBeenCalledWith(
+        "acme/widgets",
+        expect.objectContaining({ githubToken: "tok" }),
+      );
+      expect(cache.put).toHaveBeenCalled();
+      expect(cache.close).toHaveBeenCalled();
+      expect(profiles.get("acme/widgets")).toMatchObject({
+        repoFullName: "acme/widgets",
+      });
+    });
+
+    it("the default resolver serves a fresh cached profile without re-extracting", async () => {
+      const { resolveContributionProfilesForDiscover } =
+        await import("../../packages/loopover-miner/lib/discover-cli.js");
+      const cache = {
+        get: vi.fn(() => ({
+          profile: { ...trustworthyProfile },
+          fetchedAt: "x",
+          stale: false,
+        })),
+        put: vi.fn(),
+        close: vi.fn(),
+      };
+      const extract = vi.fn();
+      await resolveContributionProfilesForDiscover(["acme/widgets"], {
+        githubToken: "tok",
+        initCache: (() => cache) as never,
+        extract: extract as never,
+      });
+      expect(extract).not.toHaveBeenCalled();
+    });
   });
 });
