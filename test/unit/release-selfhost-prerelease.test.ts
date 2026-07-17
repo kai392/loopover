@@ -55,7 +55,7 @@ describe("release-selfhost.yml \"Resolve version\" step (#1937)", () => {
   it("accepts a stable semver tag and marks it non-prerelease", () => {
     const r = resolveVersion({ EVENT_NAME: "push", INPUT_VERSION: "", REF_NAME: "orb-v0.1.0" });
     expect(r.status).toBe(0);
-    expect(r.outputs).toMatchObject({ v: "0.1.0", tag: "orb-v0.1.0", release: "gittensory-orb@0.1.0", prerelease: "false" });
+    expect(r.outputs).toMatchObject({ v: "0.1.0", tag: "orb-v0.1.0", release: "loopover-orb@0.1.0", prerelease: "false" });
   });
 
   it.each(["rc", "beta"])("accepts an -%s.N prerelease tag and marks it prerelease", (kind) => {
