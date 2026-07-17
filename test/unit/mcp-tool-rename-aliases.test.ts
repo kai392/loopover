@@ -11,6 +11,7 @@
 // (#6615 registered the loopover_close_pr write-tool — 9th of the 9 buildXSpec builders — taking the count from 62 to 63.)
 // (#6732 registered the loopover_monitor_open_prs CLI mirror, taking the count from 63 to 64.)
 // (#6752 registered the loopover_build_results_payload CLI mirror, taking the count from 67 to 68.)
+// (#6755 registered the loopover_intake_idea CLI mirror, taking the count from 68 to 69.)
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { mkdtempSync, rmSync } from "node:fs";
