@@ -224,8 +224,17 @@ export function normalizeDiscoveryIndexResponse(raw: unknown): ParsedDiscoveryIn
     warnings.push("DiscoveryIndexResponse must be a mapping; falling back to an empty candidate list.");
   }
   const rawCandidates = record && Array.isArray(record.candidates) ? record.candidates : [];
+  // #6774: the request side clamps page size to MAX_PAGE_LIMIT, but this response comes from the OPTIONAL,
+  // only-partially-trusted hosted index (see this module's header). A misbehaving or compromised host could
+  // otherwise return an arbitrarily large `candidates` array and force unbounded client-side normalization. Cap
+  // it, dropping the overflow with a warning; the retained page and `nextCursor` still round-trip so pagination
+  // continues from the truncated page.
+  const boundedCandidates = rawCandidates.length > MAX_PAGE_LIMIT ? rawCandidates.slice(0, MAX_PAGE_LIMIT) : rawCandidates;
+  if (boundedCandidates.length < rawCandidates.length) {
+    warnings.push(`DiscoveryIndexResponse returned ${rawCandidates.length} candidates; capping to ${MAX_PAGE_LIMIT} and dropping the rest.`);
+  }
   const candidates: DiscoveryIndexCandidate[] = [];
-  for (const entry of rawCandidates) {
+  for (const entry of boundedCandidates) {
     const normalized = normalizeDiscoveryIndexCandidate(entry);
     if (normalized === null) {
       warnings.push("DiscoveryIndexResponse dropped an invalid or boundary-violating candidate.");

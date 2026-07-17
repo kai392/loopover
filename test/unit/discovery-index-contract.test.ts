@@ -173,5 +173,14 @@ describe("discovery-index API contract (#4300)", () => {
       expect(empty.warnings.join(" ")).toMatch(/must be a mapping/);
       expect(normalizeDiscoveryIndexResponse({ candidates: "nope", nextCursor: "  " }).response).toMatchObject({ candidates: [], nextCursor: null });
     });
+
+    it("caps an oversized candidate array at MAX_PAGE_LIMIT (200) with a warning, and still round-trips nextCursor for the truncated page (#6774)", () => {
+      // A misbehaving/compromised discovery-index host returns far more than the request-side page cap allows.
+      const oversized = Array.from({ length: 250 }, (_, i) => ({ ...VALID_CANDIDATE, issueNumber: i + 1 }));
+      const parsed = normalizeDiscoveryIndexResponse({ candidates: oversized, nextCursor: "page2==" });
+      expect(parsed.response.candidates).toHaveLength(200); // dropped the overflow rather than processing 250
+      expect(parsed.warnings.some((w) => /returned 250 candidates; capping to 200/.test(w))).toBe(true);
+      expect(parsed.response.nextCursor).toBe("page2=="); // truncation must not break forward pagination
+    });
   });
 });
