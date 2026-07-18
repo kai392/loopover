@@ -192,3 +192,127 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run publish-ui-kit.yml --ref "${{ steps.release.outputs['packages/loopover-ui-kit--tag_name'] }}" -f released_by_release_please=true
+
+  # Self-heal for a known, reproducible, upstream googleapis/release-please limitation
+  # (googleapis/release-please#1946, #1444, #1406 -- all the same "There are untagged, merged release
+  # PRs outstanding - aborting" message, unresolved upstream): createReleases() (which actually tags a
+  # merged Release PR) sometimes finds nothing to do, and createPullRequests() then aborts on every
+  # subsequent run without ever tagging the merged PR -- confirmed live across two separate
+  # linked-versions release cycles this session (#7127, #7133), both requiring a manual dispatch of
+  # each publish-*.yml workflow plus manually flipping the merged PR's `autorelease: pending` label to
+  # `autorelease: tagged` to unstick it. Traced as far as release-please's own source
+  # (manifest.ts/workspace.ts) allows without being able to modify the third-party action itself.
+  #
+  # Rather than depend on release-please's own `steps.release.outputs` above (unreliable exactly when
+  # this bug is in play, since createReleases() never actually tagged anything), this reconciles from
+  # the OTHER direction: compare each package's committed package.json version against what's
+  # ACTUALLY live on npm, and self-heal by dispatching that package's publish workflow directly
+  # whenever they disagree -- the same "bare manual dispatch" human-override path each publish-*.yml
+  # already documents, just triggered automatically instead of by a human noticing red CI on an
+  # unrelated PR days later. Runs on every push (cheap: a handful of `npm view` calls, no-op when
+  # everything's already in sync), independent of whether the release-please job above succeeded,
+  # aborted, or hit a transient error.
+  #
+  # Engine publishes first and is awaited before mcp/miner: they carry a real runtime dependency on
+  # it, and their own isolated pack/smoke-test step resolves @loopover/engine from the real npm
+  # registry (no local workspace symlink available in that isolated temp dir), so it fails with
+  # ETARGET if engine hasn't actually finished publishing yet (confirmed live: the first attempt at
+  # this exact reconciliation, dispatched in parallel, hit that exact race).
+  reconcile-stale-releases:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: ${{ !cancelled() }}
+    environment: release
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.18.0
+      - name: Publish any package whose committed version isn't live on npm yet
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          needs_publish() {
+            local dir="$1" pkg="$2"
+            local local_version published_version
+            local_version="$(node -p "require('./$dir/package.json').version")"
+            published_version="$(npm view "$pkg" version 2>/dev/null || echo "")"
+            if [ "$local_version" != "$published_version" ]; then
+              echo "$pkg: committed $local_version, npm has ${published_version:-<none>}."
+              return 0
+            fi
+            echo "$pkg: already in sync at $local_version."
+            return 1
+          }
+
+          dispatch_and_wait() {
+            local workflow="$1"
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY"
+            sleep 8
+            local run_id
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 1 --json databaseId --jq '.[0].databaseId')"
+            echo "Dispatched $workflow as run $run_id, waiting for it to complete..."
+            while [ "$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json status --jq '.status')" != "completed" ]; do
+              sleep 15
+            done
+            local conclusion
+            conclusion="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+            echo "$workflow (run $run_id) concluded: $conclusion"
+            [ "$conclusion" = "success" ]
+          }
+
+          engine_ok=true
+          if needs_publish packages/loopover-engine @loopover/engine; then
+            dispatch_and_wait publish-engine.yml || engine_ok=false
+          fi
+
+          if [ "$engine_ok" = "true" ]; then
+            if needs_publish packages/loopover-mcp @loopover/mcp; then
+              dispatch_and_wait publish-mcp.yml || echo "::warning::publish-mcp.yml did not succeed -- left for manual follow-up."
+            fi
+            if needs_publish packages/loopover-miner @loopover/miner; then
+              dispatch_and_wait publish-miner.yml || echo "::warning::publish-miner.yml did not succeed -- left for manual follow-up."
+            fi
+          else
+            echo "::warning::Skipping mcp/miner reconciliation -- publish-engine.yml did not succeed, and they depend on it."
+          fi
+
+          if needs_publish packages/loopover-ui-kit @loopover/ui-kit; then
+            dispatch_and_wait publish-ui-kit.yml || echo "::warning::publish-ui-kit.yml did not succeed -- left for manual follow-up."
+          fi
+
+      # Once every committed version is confirmed live on npm (the loop above didn't need to run, or
+      # completed successfully for everything it dispatched), any merged Release PR still carrying
+      # release-please's own `autorelease: pending` label is exactly the stuck state this job exists
+      # to fix -- flip it so release-please's NEXT run stops aborting on it.
+      - name: Un-stick release-please's own tracking on any merged-but-still-pending release PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          for dir_pkg in "packages/loopover-engine:@loopover/engine" "packages/loopover-mcp:@loopover/mcp" "packages/loopover-miner:@loopover/miner" "packages/loopover-ui-kit:@loopover/ui-kit"; do
+            dir="${dir_pkg%%:*}"
+            pkg="${dir_pkg##*:}"
+            local_version="$(node -p "require('./$dir/package.json').version")"
+            published_version="$(npm view "$pkg" version 2>/dev/null || echo "")"
+            if [ "$local_version" != "$published_version" ]; then
+              echo "::warning::$pkg still not live on npm (committed $local_version, npm has ${published_version:-<none>}) -- leaving autorelease labels alone."
+              exit 0
+            fi
+          done
+          numbers="$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged --label "autorelease: pending" --json number --jq '.[].number')"
+          for number in $numbers; do
+            echo "Flipping autorelease label on merged PR #$number -- its packages are confirmed live on npm."
+            gh pr edit "$number" --repo "$GITHUB_REPOSITORY" --remove-label "autorelease: pending" --add-label "autorelease: tagged"
+          done
