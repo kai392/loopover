@@ -3,7 +3,8 @@ import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceF
 import { enforceRateLimit, RateLimiter, routeClassForPath } from "../../src/auth/rate-limit";
 import { authenticatePrivateToken, buildBrowserSessionCookie, createSessionForGitHubUser, extractCookieValue, isAuthorizedGitHubSessionLogin, isMcpActuationRepoAllowed, revokeSession, timingSafeEqual } from "../../src/auth/security";
 import { PRODUCT_USER_AGENT } from "../../src/github/client";
-import { createTestEnv } from "../helpers/d1";
+import { issueOrbEnrollment } from "../../src/orb/broker";
+import { createTestEnv, type TestD1Database } from "../helpers/d1";
 
 describe("private-beta auth and rate limiting", () => {
   afterEach(() => {
@@ -256,6 +257,148 @@ describe("private-beta auth and rate limiting", () => {
       enforceRateLimit(fakeContext(env, "/v1/auth/extension/session", { "cf-connecting-ip": "203.0.113.9" }), "strict"),
     ).resolves.toBeNull();
     expect(observedKeys[0]).toMatch(/^strict:\/v1\/auth\/extension\/session:ip:/);
+  });
+
+  it("keys /v1/github/webhook and /v1/orb/webhook by the payload's installation.id, not IP (#4891) -- a shared hosted egress path can't collide two tenants' buckets", async () => {
+    const observedKeys: string[] = [];
+    const env = rateLimitTestEnv({}, observedKeys);
+
+    // Two DIFFERENT installations from the SAME connecting IP (a shared hosted egress) get independent buckets.
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.9" }, { installation: { id: 111 } }), "strict"),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.9" }, { installation: { id: 222 } }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toBe("strict:/v1/github/webhook:installation:111");
+    expect(observedKeys[1]).toBe("strict:/v1/github/webhook:installation:222");
+
+    // The SAME installation from two DIFFERENT IPs shares one bucket.
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.9" }, { installation: { id: 333 } }), "strict"),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "198.51.100.50" }, { installation: { id: 333 } }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+
+    // /v1/orb/webhook shares the same installation-keying logic.
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/webhook", { "cf-connecting-ip": "203.0.113.9" }, { installation: { id: 444 } }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe("strict:/v1/orb/webhook:installation:444");
+  });
+
+  it("falls back to IP-keying /v1/github/webhook when installation.id can't be resolved (#4891)", async () => {
+    const observedKeys: string[] = [];
+    const env = rateLimitTestEnv({}, observedKeys);
+
+    // No body/content-length at all.
+    await expect(enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.20" }), "strict")).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/github\/webhook:ip:/);
+
+    // content-length exceeds the peek cap -- falls back to IP without ever reading the body.
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(
+        fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.21", "content-length": String(2 * 1024 * 1024) }, { installation: { id: 555 } }),
+        "strict",
+      ),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/github\/webhook:ip:/);
+
+    // Unparseable JSON body -- falls back to IP.
+    observedKeys.length = 0;
+    await expect(enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.22" }, "{bad"), "strict")).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/github\/webhook:ip:/);
+
+    // Valid JSON with no installation field at all -- falls back to IP.
+    observedKeys.length = 0;
+    await expect(enforceRateLimit(fakeContext(env, "/v1/github/webhook", { "cf-connecting-ip": "203.0.113.23" }, {}), "strict")).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/github\/webhook:ip:/);
+  });
+
+  it("keys /v1/orb/relay by the deployment's bound ORB_ENROLLMENT_SECRET, not IP (#4891) -- a single-tenant relay receiver still shouldn't share a hosted egress IP's bucket", async () => {
+    const observedKeys: string[] = [];
+    const envA = rateLimitTestEnv({ ORB_ENROLLMENT_SECRET: "orbsec_tenant_a" }, observedKeys);
+    const envB = rateLimitTestEnv({ ORB_ENROLLMENT_SECRET: "orbsec_tenant_b" }, observedKeys);
+
+    // Two DIFFERENT deployments' enrollment secrets, same connecting IP -- independent buckets.
+    await expect(enforceRateLimit(fakeContext(envA, "/v1/orb/relay", { "cf-connecting-ip": "203.0.113.9" }), "strict")).resolves.toBeNull();
+    await expect(enforceRateLimit(fakeContext(envB, "/v1/orb/relay", { "cf-connecting-ip": "203.0.113.9" }), "strict")).resolves.toBeNull();
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/orb\/relay:installation:/);
+    expect(observedKeys[0]).not.toBe(observedKeys[1]);
+
+    // The SAME deployment from two DIFFERENT IPs shares one bucket.
+    observedKeys.length = 0;
+    await expect(enforceRateLimit(fakeContext(envA, "/v1/orb/relay", { "cf-connecting-ip": "203.0.113.9" }), "strict")).resolves.toBeNull();
+    await expect(enforceRateLimit(fakeContext(envA, "/v1/orb/relay", { "cf-connecting-ip": "198.51.100.50" }), "strict")).resolves.toBeNull();
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+
+    // No ORB_ENROLLMENT_SECRET bound (not a brokered self-host) -- falls back to IP.
+    observedKeys.length = 0;
+    const unbound = rateLimitTestEnv({}, observedKeys);
+    await expect(enforceRateLimit(fakeContext(unbound, "/v1/orb/relay", { "cf-connecting-ip": "203.0.113.24" }), "strict")).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/orb\/relay:ip:/);
+  });
+
+  it("keys /v1/orb/token, /v1/orb/relay/register and /v1/orb/relay/pull by the enrollment's bound installation, not IP (#4891)", async () => {
+    const observedKeys: string[] = [];
+    const env = rateLimitTestEnv({}, observedKeys);
+    const db = env.DB as unknown as TestD1Database;
+    await db.prepare("INSERT INTO orb_github_installations (installation_id, registered) VALUES (?, 1)").bind(601).run();
+    await db.prepare("INSERT INTO orb_github_installations (installation_id, registered) VALUES (?, 1)").bind(602).run();
+    const { secret: secretA } = (await issueOrbEnrollment(env, 601)) as { secret: string };
+    const { secret: secretB } = (await issueOrbEnrollment(env, 602)) as { secret: string };
+
+    // Two DIFFERENT installations' enrollment secrets, same connecting IP -- independent buckets.
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/token", { authorization: `Bearer ${secretA}`, "cf-connecting-ip": "203.0.113.9" }), "strict"),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/token", { authorization: `Bearer ${secretB}`, "cf-connecting-ip": "203.0.113.9" }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys).toHaveLength(2);
+    expect(observedKeys[0]).toBe("strict:/v1/orb/token:installation:601");
+    expect(observedKeys[1]).toBe("strict:/v1/orb/token:installation:602");
+
+    // The SAME installation's secret from two DIFFERENT IPs shares one bucket.
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/token", { authorization: `Bearer ${secretA}`, "cf-connecting-ip": "203.0.113.9" }), "strict"),
+    ).resolves.toBeNull();
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/token", { authorization: `Bearer ${secretA}`, "cf-connecting-ip": "198.51.100.50" }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe(observedKeys[1]);
+
+    // /v1/orb/relay/register and /v1/orb/relay/pull share the same enrollment-keying logic.
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/relay/register", { authorization: `Bearer ${secretA}`, "cf-connecting-ip": "203.0.113.9" }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe("strict:/v1/orb/relay/register:installation:601");
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/relay/pull", { authorization: `Bearer ${secretA}`, "cf-connecting-ip": "203.0.113.9" }), "normal"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toBe("normal:/v1/orb/relay/pull:installation:601");
+
+    // No bearer token at all -- falls back to IP.
+    observedKeys.length = 0;
+    await expect(enforceRateLimit(fakeContext(env, "/v1/orb/token", { "cf-connecting-ip": "203.0.113.25" }), "strict")).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/orb\/token:ip:/);
+
+    // An unrecognized/revoked secret -- falls back to IP.
+    observedKeys.length = 0;
+    await expect(
+      enforceRateLimit(fakeContext(env, "/v1/orb/token", { authorization: "Bearer orbsec_unknown", "cf-connecting-ip": "203.0.113.26" }), "strict"),
+    ).resolves.toBeNull();
+    expect(observedKeys[0]).toMatch(/^strict:\/v1\/orb\/token:ip:/);
   });
 
   it("ignores proxy fallback headers when cf-connecting-ip is absent", async () => {
@@ -1075,15 +1218,23 @@ function rateLimitTestEnv(overrides: Partial<Env> = {}, observedKeys?: string[])
   });
 }
 
-function fakeContext(env: Env, path: string, headers: Record<string, string> = {}) {
+function fakeContext(env: Env, path: string, headers: Record<string, string> = {}, body?: unknown) {
   const responseHeaders = new Headers();
+  // A string `body` is sent verbatim (e.g. to exercise a malformed/unparseable payload); anything else is
+  // JSON-stringified, matching the shape a real caller would POST.
+  const bodyText = body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body);
+  const effectiveHeaders = { ...headers };
+  if (bodyText !== undefined && !("content-length" in effectiveHeaders) && !("Content-Length" in effectiveHeaders)) {
+    effectiveHeaders["content-length"] = String(new TextEncoder().encode(bodyText).length);
+  }
   return {
     env,
     req: {
       path,
       header(name: string) {
-        return headers[name.toLowerCase()] ?? headers[name];
+        return effectiveHeaders[name.toLowerCase()] ?? effectiveHeaders[name];
       },
+      raw: bodyText === undefined ? undefined : new Request(`https://loopover.test${path}`, { method: "POST", body: bodyText }),
     },
     res: { headers: responseHeaders },
     json(body: unknown, status: number, responseHeadersInit?: HeadersInit) {
