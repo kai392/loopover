@@ -1,6 +1,8 @@
 import type { Context } from "hono";
 import { DurableObject } from "cloudflare:workers";
 import { recordAuditEvent } from "../db/repositories";
+import { validateOrbRelayEnrollment } from "../orb/relay";
+import { parsePositiveInt } from "../utils/json";
 import { authenticateInternalToken, authenticatePrivateToken, extractBearerToken, hashToken } from "./security";
 
 export type RateLimitClass = "strict" | "normal" | "expensive";
@@ -174,11 +176,63 @@ async function actorHint(c: Context<{ Bindings: Env }>): Promise<string> {
 
 async function rateLimitIdentity(c: Context<{ Bindings: Env }>): Promise<string> {
   const ipIdentity = `ip:${await hashToken(clientIp(c))}`;
+
+  const installationIdentity = await installationRateLimitIdentity(c);
+  if (installationIdentity) return installationIdentity;
+
   if (isPreAuthRateLimitPath(c.req.path)) return ipIdentity;
 
   const token = extractBearerToken(c.req.header("authorization"));
   if (!token || !(await validateBearerForRateLimit(c, token))) return ipIdentity;
   return `token:${await hashToken(token)}`;
+}
+
+// #4891: a centrally-hosted deployment brokers many self-hosted containers behind ONE shared egress path, so
+// IP-keying (the only option before this) would collide every tenant's webhook/token/relay traffic into the same
+// bucket -- exactly the correctness gap that's invisible on a self-host, which always has its own IP. These paths
+// each carry a tenant identity independent of the connecting IP; prefer it when resolvable, falling back to
+// IP-keying (below, unchanged) like every other route when it isn't -- a malformed payload, an unenrolled secret.
+const INSTALLATION_KEYED_WEBHOOK_PATHS = new Set(["/v1/github/webhook", "/v1/orb/webhook"]);
+const INSTALLATION_KEYED_ORB_BEARER_PATHS = new Set(["/v1/orb/token", "/v1/orb/relay/register", "/v1/orb/relay/pull"]);
+
+async function installationRateLimitIdentity(c: Context<{ Bindings: Env }>): Promise<string | null> {
+  const path = c.req.path;
+  if (INSTALLATION_KEYED_WEBHOOK_PATHS.has(path)) {
+    const installationId = await peekWebhookInstallationId(c);
+    return installationId === null ? null : `installation:${installationId}`;
+  }
+  if (path === "/v1/orb/relay") {
+    // Single-tenant per deployment: the bound enrollment secret (never the request body) IS this deployment's
+    // identity, the same trust boundary brokerOrbToken's installation binding relies on (src/orb/broker.ts).
+    const secret = c.env.ORB_ENROLLMENT_SECRET;
+    return secret ? `installation:${await hashToken(secret)}` : null;
+  }
+  if (INSTALLATION_KEYED_ORB_BEARER_PATHS.has(path)) {
+    const token = extractBearerToken(c.req.header("authorization"));
+    if (!token) return null;
+    const enrollment = await validateOrbRelayEnrollment(c.env, token);
+    return "error" in enrollment ? null : `installation:${enrollment.installationId}`;
+  }
+  return null;
+}
+
+const MAX_WEBHOOK_RATE_LIMIT_PEEK_BYTES = 1024 * 1024;
+
+async function peekWebhookInstallationId(c: Context<{ Bindings: Env }>): Promise<number | null> {
+  // Reads installation.id from the body BEFORE signature verification (which happens later, in the handler
+  // itself, over the same untouched stream via .clone()). The value is therefore unverified at this point --
+  // fine for bucketing (a spoofed installation.id here only shares that installation's own rate-limit bucket; it
+  // grants no access, since HMAC/enrollment verification still gates everything downstream). Bounded by
+  // content-length so a caller can't force this peek to buffer an oversized body twice.
+  const contentLength = parsePositiveInt(c.req.header("content-length"));
+  if (contentLength === null || contentLength > MAX_WEBHOOK_RATE_LIMIT_PEEK_BYTES) return null;
+  const body = (await c.req.raw
+    .clone()
+    .json()
+    .catch(() => null)) as { installation?: { id?: unknown } } | null;
+  // A JSON number is always finite (the JSON grammar has no NaN/Infinity literal), so `typeof` alone suffices.
+  const id = body?.installation?.id;
+  return typeof id === "number" ? id : null;
 }
 
 async function validateBearerForRateLimit(c: Context<{ Bindings: Env }>, token: string): Promise<boolean> {
