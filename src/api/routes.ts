@@ -305,6 +305,8 @@ import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { loadPublicReviewVolumeTrend } from "../services/public-review-volume-trend";
 import { buildMaintainerQualityDashboard, isMaintainerQualityDataStale } from "../services/maintainer-quality-dashboard";
 import { buildMaintainerSlopDuplicateTrend, SLOP_DUPLICATE_TREND_SNAPSHOT_LIMIT } from "../services/maintainer-slop-duplicate-trend";
+import { buildFederatedBenchmark } from "../orb/federated-benchmark";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { buildGateOutcomeBreakdown, GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS } from "../services/gate-outcome-breakdown";
 import { MAX_LOCAL_SCORER_WARNING_CHARS, MAX_LOCAL_SCORER_WARNING_COUNT } from "../signals/local-scorer-diagnostics";
 import { compileFocusManifestPolicy, MAX_FOCUS_MANIFEST_BYTES, resolveEffectiveSettings } from "../signals/focus-manifest";
@@ -1648,6 +1650,17 @@ export function createApp() {
       stale: qualityStale,
       nowMs: Date.parse(generatedAt),
     });
+    // Federated benchmark (#6481): "your gate precision vs peer median". Reads the opt-in from the loopover
+    // self-repo's manifest (mirrors prReconciliation/publicStats/etc.'s fleet-wide override lookup) rather
+    // than any of the maintainer's own repos — federatedIntelligence is operator-level, not per-repo. Bounded
+    // to a single, short-timeout attempt so an unreachable or slow collector degrades the panel to its
+    // existing empty state instead of holding up the whole dashboard load.
+    const federatedIntelligenceManifest = await loadRepoFocusManifest(c.env, resolveLoopOverSelfRepoFullName(c.env));
+    const federatedBenchmark = await buildFederatedBenchmark(federatedIntelligenceManifest, c.env.DB, {
+      now: Date.parse(generatedAt),
+      timeoutMs: 5_000,
+      maxAttempts: 1,
+    });
     const qualityDashboard = {
       ...buildMaintainerQualityDashboard({
         repos: qualityRepoInputs,
@@ -1656,6 +1669,7 @@ export function createApp() {
         repoTotal: repositories.length,
       }),
       slopDuplicateTrend,
+      federatedBenchmark,
     };
     const gateOutcomeSinceIso = new Date(Date.parse(generatedAt) - GATE_OUTCOME_BREAKDOWN_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const gateOutcomeRollups = await listGateOutcomeAuditEventRollups(c.env, {

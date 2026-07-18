@@ -38,6 +38,8 @@ import {
 } from "@/components/site/app-panels/queue-health-card";
 import { SlopDuplicateTrendCard } from "@/components/site/app-panels/slop-duplicate-trend-card";
 import type { MaintainerSlopDuplicateTrend } from "@/components/site/app-panels/slop-duplicate-trend-card-model";
+import { FederatedBenchmarkCard } from "@/components/site/app-panels/federated-benchmark-card";
+import type { MaintainerFederatedBenchmark } from "@/components/site/app-panels/federated-benchmark-card-model";
 import { MaintainerSettings } from "@/components/site/app-panels/maintainer-settings";
 import { OnboardingPreviewCard } from "@/components/site/app-panels/onboarding-preview-card";
 import { CheckRunReadinessTable } from "@/components/site/check-run-readiness-table";
@@ -109,6 +111,7 @@ type MaintainerDashboard = {
     mcpToolUsage?: McpToolUsageSummary;
     queueHealth?: MaintainerQueueHealth;
     slopDuplicateTrend?: MaintainerSlopDuplicateTrend;
+    federatedBenchmark?: MaintainerFederatedBenchmark | null;
   };
 };
 
@@ -453,6 +456,10 @@ function MaintainerDashboardView({
 
           {data.qualityDashboard.slopDuplicateTrend ? (
             <SlopDuplicateTrendCard trend={data.qualityDashboard.slopDuplicateTrend} />
+          ) : null}
+
+          {data.qualityDashboard.federatedBenchmark ? (
+            <FederatedBenchmarkCard benchmark={data.qualityDashboard.federatedBenchmark} />
           ) : null}
 
           <ContributorQualityTable topContributors={data.qualityDashboard.topContributors} />
