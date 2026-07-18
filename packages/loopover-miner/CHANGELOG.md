@@ -1,5 +1,26 @@
 # Changelog
 
+## [3.3.0](https://github.com/JSONbored/loopover/compare/miner-v3.2.3...miner-v3.3.0) (2026-07-18)
+
+
+### Features
+
+* **miner:** add AMS hosted-container health HTTP endpoint ([#7177](https://github.com/JSONbored/loopover/issues/7177)) ([#7185](https://github.com/JSONbored/loopover/issues/7185)) ([53527e6](https://github.com/JSONbored/loopover/commit/53527e6fc4f6cc4b218ec054e45d8117b6077dc2))
+* **miner:** SqliteDriver store seam + migrate run-state ([#7194](https://github.com/JSONbored/loopover/issues/7194)) ([c3660a2](https://github.com/JSONbored/loopover/commit/c3660a25dd27d1b3b6c56eaf24dded9ef0baf0bd))
+
+
+### Fixes
+
+* **miner:** scan coding-agent driver roots in env-reference generator ([#6994](https://github.com/JSONbored/loopover/issues/6994)) ([#7154](https://github.com/JSONbored/loopover/issues/7154)) ([1d7248b](https://github.com/JSONbored/loopover/commit/1d7248bcec5ad750177d213231a6dff560703ed6))
+* **miner:** serialize repo clones across processes with a lockfile ([#7084](https://github.com/JSONbored/loopover/issues/7084)) ([#7162](https://github.com/JSONbored/loopover/issues/7162)) ([051e969](https://github.com/JSONbored/loopover/commit/051e969a30fff45916502c5e9e183f70a84242e8))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @loopover/engine bumped from ^3.2.3 to ^3.3.0
+
 ## [3.2.3](https://github.com/JSONbored/loopover/compare/miner-v3.2.2...miner-v3.2.3) (2026-07-18)
 
 

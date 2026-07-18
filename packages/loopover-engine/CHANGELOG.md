@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.3.0](https://github.com/JSONbored/loopover/compare/engine-v3.2.3...engine-v3.3.0) (2026-07-18)
+
+
+### Chores
+
+* **engine:** Synchronize engine-and-dependents versions
+
 ## [3.2.3](https://github.com/JSONbored/loopover/compare/engine-v3.2.2...engine-v3.2.3) (2026-07-18)
 
 
