@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildClaimPlan,
   buildTaskGraph,
+  existingTargetRepo,
   scoreTaskGraph,
   validateIdeaSubmission,
   IDEA_TITLE_MAX_CHARS,
@@ -9,25 +10,50 @@ import {
   IDEA_CONSTRAINT_MAX_CHARS,
   type ConstituentIssueDraft,
   type IdeaSubmission,
+  type IdeaTarget,
   type TaskGraph,
 } from "../../packages/loopover-engine/src/idea-intake";
 
+function existingTarget(repo = "acme/widgets"): IdeaTarget {
+  return { kind: "existing", repo };
+}
+
 function validIdea(overrides: Partial<IdeaSubmission> = {}): IdeaSubmission {
-  return { id: "idea-1", title: "One-line intent", body: "A freeform description of the outcome.", targetRepo: "acme/widgets", ...overrides };
+  return {
+    id: "idea-1",
+    title: "One-line intent",
+    body: "A freeform description of the outcome.",
+    targetRepo: existingTarget(),
+    ...overrides,
+  };
 }
 
 describe("validateIdeaSubmission", () => {
-  it("accepts a full, well-formed submission", () => {
+  it("accepts a full, well-formed submission targeting an existing repo", () => {
     const r = validateIdeaSubmission({
-      id: "idea-1", title: "t", body: "b", targetRepo: "owner/name",
+      id: "idea-1", title: "t", body: "b", targetRepo: { kind: "existing", repo: "owner/name" },
       constraints: ["no new dependencies"], acceptanceHints: ["existing callers keep working"], priority: "high",
     });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.idea.priority).toBe("high");
+    if (r.ok) {
+      expect(r.idea.priority).toBe("high");
+      expect(r.idea.targetRepo).toEqual({ kind: "existing", repo: "owner/name" });
+    }
+  });
+
+  it("accepts a provision target (APR — no repo yet)", () => {
+    const r = validateIdeaSubmission({
+      id: "idea-1", title: "t", body: "b", targetRepo: { kind: "provision" },
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.idea.targetRepo).toEqual({ kind: "provision" });
+      expect(existingTargetRepo(r.idea.targetRepo)).toBeNull();
+    }
   });
 
   it("accepts a minimal submission (only required fields)", () => {
-    const r = validateIdeaSubmission({ id: "i", title: "t", body: "b", targetRepo: "o/n" });
+    const r = validateIdeaSubmission({ id: "i", title: "t", body: "b", targetRepo: { kind: "existing", repo: "o/n" } });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.idea.constraints).toBeUndefined();
   });
@@ -52,10 +78,23 @@ describe("validateIdeaSubmission", () => {
     if (!r.ok) expect(r.errors).toEqual(expect.arrayContaining(["title_too_long", "body_too_long"]));
   });
 
-  it("flags a malformed targetRepo (must be owner/name)", () => {
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "no-slash" })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "a/b/c" })).ok).toBe(false);
-    expect(validateIdeaSubmission(validIdea({ targetRepo: "owner/name" })).ok).toBe(true);
+  it("flags a malformed existing targetRepo (must be owner/name)", () => {
+    expect(validateIdeaSubmission(validIdea({ targetRepo: { kind: "existing", repo: "no-slash" } })).ok).toBe(false);
+    expect(validateIdeaSubmission(validIdea({ targetRepo: { kind: "existing", repo: "a/b/c" } })).ok).toBe(false);
+    expect(validateIdeaSubmission(validIdea({ targetRepo: { kind: "existing", repo: "owner/name" } })).ok).toBe(true);
+  });
+
+  it("flags a legacy plain-string targetRepo and an unknown kind as malformed", () => {
+    expect(validateIdeaSubmission({ id: "i", title: "t", body: "b", targetRepo: "owner/name" }).ok).toBe(false);
+    const legacy = validateIdeaSubmission({ id: "i", title: "t", body: "b", targetRepo: "owner/name" });
+    if (!legacy.ok) expect(legacy.errors).toContain("target_repo_malformed");
+    expect(validateIdeaSubmission({ id: "i", title: "t", body: "b", targetRepo: { kind: "other" } }).ok).toBe(false);
+  });
+
+  it("flags an existing target with a blank repo as required", () => {
+    const r = validateIdeaSubmission({ id: "i", title: "t", body: "b", targetRepo: { kind: "existing", repo: "  " } });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errors).toContain("target_repo_required");
   });
 
   it("flags invalid constraints (non-array, non-string element, over-length entry)", () => {
@@ -96,7 +135,7 @@ describe("validateIdeaSubmission", () => {
     const r = validateIdeaSubmission({
       title: "t",
       body: "b",
-      targetRepo: "o/n",
+      targetRepo: { kind: "existing", repo: "o/n" },
       acceptanceHints: ["h".repeat(IDEA_CONSTRAINT_MAX_CHARS + 1)],
     });
     expect(r.ok).toBe(false);
@@ -132,6 +171,13 @@ describe("buildTaskGraph — spec §4 Example A (simple idea → one issue → g
 
   it("treats an empty drafts array the same as none (single-issue baseline)", () => {
     expect(buildTaskGraph(idea, []).issues).toHaveLength(1);
+  });
+
+  it("builds the same single-issue baseline for a provision target", () => {
+    const g = buildTaskGraph(validIdea({ id: "idea-P", targetRepo: { kind: "provision" } }));
+    expect(g.ideaId).toBe("idea-P");
+    expect(g.issues).toHaveLength(1);
+    expect(g.rubric.verdict).toBe("go");
   });
 });
 
@@ -230,10 +276,12 @@ describe("scoreTaskGraph — graph verdict is the least-favorable across issues"
 });
 
 describe("buildClaimPlan — routes a scored task-graph into a loop claim plan (#4799)", () => {
-  const idea = validIdea({ id: "idea-C", targetRepo: "acme/widgets" });
+  const idea = validIdea({ id: "idea-C", targetRepo: existingTarget("acme/widgets") });
 
   it("puts a lone go issue in claimable, carrying the target repo", () => {
-    const plan = buildClaimPlan(buildTaskGraph(idea, [{ key: "issue-1", title: "Add widget", body: "new" }]), idea.targetRepo);
+    const repo = existingTargetRepo(idea.targetRepo);
+    expect(repo).toBe("acme/widgets");
+    const plan = buildClaimPlan(buildTaskGraph(idea, [{ key: "issue-1", title: "Add widget", body: "new" }]), repo!);
     expect(plan.ideaId).toBe("idea-C");
     expect(plan.targetRepo).toBe("acme/widgets");
     expect(plan.graphVerdict).toBe("go");
@@ -249,7 +297,7 @@ describe("buildClaimPlan — routes a scored task-graph into a loop claim plan (
       { key: "issue-2", title: "Held", body: "b", dependsOn: ["issue-1"] }, // raise (dep not landed) -> deferred
       { key: "issue-3", title: "Unshippable", body: "b", feasibility: { issueStatus: "invalid" } }, // avoid -> skipped
     ]);
-    const plan = buildClaimPlan(graph, idea.targetRepo);
+    const plan = buildClaimPlan(graph, existingTargetRepo(idea.targetRepo)!);
     expect(plan.claimable.map((s) => s.key)).toEqual(["issue-1"]);
     expect(plan.deferred.map((s) => s.key)).toEqual(["issue-2"]);
     expect(plan.deferred[0]?.reasons).toContain("dependency_not_landed");

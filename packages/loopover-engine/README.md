@@ -767,19 +767,19 @@ targetRepo)` routes the scored graph into a `ClaimPlan` — `go` → `claimable`
 `skipped` — in dependency-respecting order.
 
 ```ts
-import { validateIdeaSubmission, buildTaskGraph, scoreTaskGraph, buildClaimPlan } from "@loopover/engine";
+import { validateIdeaSubmission, buildTaskGraph, scoreTaskGraph, buildClaimPlan, existingTargetRepo } from "@loopover/engine";
 
 const result = validateIdeaSubmission({
   id: "idea-1",
   title: "Add CSV export to the reports page",
   body: "Users want to download the reports table as CSV so they can pivot it in a spreadsheet.",
-  targetRepo: "acme/reports",
+  targetRepo: { kind: "existing", repo: "acme/reports" },
   priority: "high",
 });
 if (result.ok) {
   const graph = buildTaskGraph(result.idea);
   scoreTaskGraph(graph); // { verdict: "go", perIssue: [{ key: "issue-1", verdict: "go", reasons: [] }] }
-  buildClaimPlan(graph, "acme/reports");
+  buildClaimPlan(graph, existingTargetRepo(result.idea.targetRepo)!);
   // { ideaId: "idea-1", targetRepo: "acme/reports", graphVerdict: "go",
   //   claimable: [{ key: "issue-1", title: "Add CSV export to the reports page", targetRepo: "acme/reports", verdict: "go", reasons: [] }],
   //   deferred: [], skipped: [] }

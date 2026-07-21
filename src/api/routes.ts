@@ -217,7 +217,7 @@ import { buildStructuralImprovementAssessment } from "../signals/improvement";
 import { evaluateEscalation } from "../loop-escalation";
 import { buildResultsPayload } from "../results-payload";
 import { buildProgressSnapshot } from "../loop-progress";
-import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan } from "../idea-intake";
+import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan, existingTargetRepo } from "../idea-intake";
 import { loadPrAiReviewFindings } from "../mcp/pr-ai-review-findings";
 import {
   buildMcpCompatibilityMetadata,
@@ -552,7 +552,8 @@ const intakeIdeaSchema = z.object({
   id: z.string().optional(),
   title: z.string().optional(),
   body: z.string().optional(),
-  targetRepo: z.string().optional(),
+  // Loose on purpose (#7635): engine owns IdeaTarget shape (`existing` | `provision`).
+  targetRepo: z.unknown().optional(),
   constraints: z.array(z.string()).max(50).optional(),
   acceptanceHints: z.array(z.string()).max(50).optional(),
   priority: z.string().optional(),
@@ -3714,7 +3715,10 @@ export function createApp() {
     const validated = validateIdeaSubmission(parsed.data);
     if (!validated.ok) return c.json({ ok: false, errors: validated.errors }, 400);
     const graph = buildTaskGraph(validated.idea, parsed.data.decomposition);
-    const claimPlan = buildClaimPlan(graph, validated.idea.targetRepo);
+    // Claim/code/submit needs a concrete owner/name; provision targets have no repo yet (#7635).
+    const repo = existingTargetRepo(validated.idea.targetRepo);
+    if (repo === null) return c.json({ ok: false, errors: ["target_repo_required"] }, 400);
+    const claimPlan = buildClaimPlan(graph, repo);
     return c.json({ ok: true, verdict: claimPlan.graphVerdict, claimPlan });
   });
 

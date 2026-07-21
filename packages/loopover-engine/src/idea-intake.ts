@@ -19,12 +19,17 @@ export const IDEA_CONSTRAINT_MAX_CHARS = 200;
 
 export type IdeaPriority = "normal" | "high";
 
+/** Where an idea should land (#7635 / #7589): an existing BYOR repo, or an APR repo not yet provisioned. */
+export type IdeaTarget =
+  | { kind: "existing"; repo: string }
+  | { kind: "provision" };
+
 /** The raw input a renter provides (spec §1). */
 export type IdeaSubmission = {
   id: string;
   title: string;
   body: string;
-  targetRepo: string;
+  targetRepo: IdeaTarget;
   constraints?: string[] | undefined;
   acceptanceHints?: string[] | undefined;
   priority?: IdeaPriority | undefined;
@@ -80,6 +85,43 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+const TARGET_REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/** Parse `IdeaTarget` from raw intake input. `existing` still requires `owner/name`; `provision` needs no repo. */
+function parseIdeaTarget(raw: unknown, errors: string[]): IdeaTarget | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    errors.push("target_repo_required");
+    return undefined;
+  }
+  // Plain strings (pre-#7635) and other non-objects are malformed — the field is now a discriminated union.
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push("target_repo_malformed");
+    return undefined;
+  }
+  const input = raw as Record<string, unknown>;
+  if (input.kind === "provision") return { kind: "provision" };
+  if (input.kind === "existing") {
+    // `owner/name`, each segment a GitHub-legal slug — an uninstallable/malformed repo is rejected at intake,
+    // never scored, since it can never produce a `go`.
+    if (!isNonEmptyString(input.repo)) {
+      errors.push("target_repo_required");
+      return undefined;
+    }
+    if (!TARGET_REPO_SLUG.test(input.repo)) {
+      errors.push("target_repo_malformed");
+      return undefined;
+    }
+    return { kind: "existing", repo: input.repo };
+  }
+  errors.push("target_repo_malformed");
+  return undefined;
+}
+
+/** Concrete `owner/name` when the target already exists; `null` for APR `provision` (no repo yet). */
+export function existingTargetRepo(target: IdeaTarget): string | null {
+  return target.kind === "existing" ? target.repo : null;
+}
+
 /** Validate + normalize a raw renter submission (spec §1). Returns every failure at once (never folds with
  *  `??`/`||`) so a caller can surface all problems in one pass rather than one-at-a-time. */
 export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
@@ -91,10 +133,7 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
   else if (input.title.length > IDEA_TITLE_MAX_CHARS) errors.push("title_too_long");
   if (!isNonEmptyString(input.body)) errors.push("body_required");
   else if (input.body.length > IDEA_BODY_MAX_CHARS) errors.push("body_too_long");
-  // `owner/name`, each segment a GitHub-legal slug — an uninstallable/malformed repo is rejected at intake,
-  // never scored, since it can never produce a `go`.
-  if (!isNonEmptyString(input.targetRepo)) errors.push("target_repo_required");
-  else if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(input.targetRepo)) errors.push("target_repo_malformed");
+  const targetRepo = parseIdeaTarget(input.targetRepo, errors);
 
   const constraints = input.constraints;
   if (constraints !== undefined) {
@@ -109,14 +148,14 @@ export function validateIdeaSubmission(raw: unknown): IdeaValidationResult {
   const priority = input.priority;
   if (priority !== undefined && priority !== "normal" && priority !== "high") errors.push("priority_invalid");
 
-  if (errors.length > 0) return { ok: false, errors };
+  if (errors.length > 0 || targetRepo === undefined) return { ok: false, errors };
   return {
     ok: true,
     idea: {
       id: input.id as string,
       title: input.title as string,
       body: input.body as string,
-      targetRepo: input.targetRepo as string,
+      targetRepo,
       constraints: constraints as string[] | undefined,
       acceptanceHints: acceptanceHints as string[] | undefined,
       priority: priority as IdeaPriority | undefined,

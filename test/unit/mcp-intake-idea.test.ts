@@ -21,7 +21,7 @@ describe("MCP loopover_intake_idea", () => {
       arguments: {
         id: "idea-A", title: "Retry flaky uploads",
         body: "Our upload client gives up on the first 5xx; it should retry a few times before failing.",
-        targetRepo: "acme/widgets", constraints: ["no new dependencies"],
+        targetRepo: { kind: "existing", repo: "acme/widgets" }, constraints: ["no new dependencies"],
       },
     });
     expect(result.isError).toBeFalsy();
@@ -38,7 +38,7 @@ describe("MCP loopover_intake_idea", () => {
       arguments: {
         id: "idea-B", title: "Add API key auth to the public endpoints",
         body: "Let callers authenticate the read API with an API key instead of leaving it open.",
-        targetRepo: "acme/widgets",
+        targetRepo: { kind: "existing", repo: "acme/widgets" },
         decomposition: [
           { key: "issue-1", title: "Introduce API-key store + validation helper", body: "A valid key validates." },
           { key: "issue-2", title: "Gate the read endpoints behind key validation", body: "Require a valid key.", dependsOn: ["issue-1"] },
@@ -69,7 +69,7 @@ describe("MCP loopover_plan_idea_claims", () => {
     const result = await client.callTool({
       name: "loopover_plan_idea_claims",
       arguments: {
-        id: "idea-P", title: "Add API key auth", body: "Authenticate the read API with a key.", targetRepo: "acme/widgets",
+        id: "idea-P", title: "Add API key auth", body: "Authenticate the read API with a key.", targetRepo: { kind: "existing", repo: "acme/widgets" },
         decomposition: [
           { key: "issue-1", title: "Introduce API-key store", body: "validate keys" },
           { key: "issue-2", title: "Gate the read endpoints", body: "require a key", dependsOn: ["issue-1"] },

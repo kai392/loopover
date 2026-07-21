@@ -16,7 +16,12 @@ let client: Client;
 let transport: StdioClientTransport;
 let configDir: string;
 
-const VALID = { id: "idea-1", title: "Retry uploads on 5xx", body: "Uploads fail silently on 5xx.", targetRepo: "acme/widgets" };
+const VALID = {
+  id: "idea-1",
+  title: "Retry uploads on 5xx",
+  body: "Uploads fail silently on 5xx.",
+  targetRepo: { kind: "existing" as const, repo: "acme/widgets" },
+};
 
 beforeEach(async () => {
   configDir = mkdtempSync(join(tmpdir(), "loopover-intake-idea-"));

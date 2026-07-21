@@ -172,7 +172,7 @@ import { buildPredictedGateVerdict, buildGateDispositions, type PredictedGateVer
 export { buildGateDispositions, type GateDisposition } from "../rules/predicted-gate";
 import { buildIssueSlopAssessment } from "../signals/issue-slop";
 import { buildSlopAssessment } from "../signals/slop";
-import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan } from "../idea-intake";
+import { validateIdeaSubmission, buildTaskGraph, buildClaimPlan, existingTargetRepo } from "../idea-intake";
 import { buildResultsPayload } from "../results-payload";
 import { buildProgressSnapshot } from "../loop-progress";
 import { evaluateEscalation } from "../loop-escalation";
@@ -1132,7 +1132,8 @@ const intakeIdeaShape = {
   id: z.string().optional(),
   title: z.string().optional(),
   body: z.string().optional(),
-  targetRepo: z.string().optional(),
+  // Loose on purpose (#7635): engine owns IdeaTarget shape (`existing` | `provision`).
+  targetRepo: z.unknown().optional(),
   constraints: z.array(z.string()).max(50).optional(),
   acceptanceHints: z.array(z.string()).max(50).optional(),
   priority: z.string().optional(),
@@ -3700,7 +3701,14 @@ export class LoopoverMcp {
       };
     }
     const graph = buildTaskGraph(validated.idea, input.decomposition);
-    const claimPlan = buildClaimPlan(graph, validated.idea.targetRepo);
+    const repo = existingTargetRepo(validated.idea.targetRepo);
+    if (repo === null) {
+      return {
+        summary: "Invalid idea submission: target_repo_required.",
+        data: { ok: false, errors: ["target_repo_required"] } as unknown as Record<string, unknown>,
+      };
+    }
+    const claimPlan = buildClaimPlan(graph, repo);
     return {
       summary: `Claim plan: ${claimPlan.claimable.length} claimable, ${claimPlan.deferred.length} deferred, ${claimPlan.skipped.length} skipped.`,
       data: { ok: true, verdict: claimPlan.graphVerdict, claimPlan } as unknown as Record<string, unknown>,
