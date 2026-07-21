@@ -262,6 +262,57 @@ describe("preview-url pagination (#7450)", () => {
     vi.stubGlobal("fetch", fetchMock);
     await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "status-down" })).resolves.toEqual({ url: null, failed: false });
   });
+
+  it("getLatestDeploymentStatus skips deployments without an id and still finds a preview URL", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{}, { id: 2 }]);
+      return Response.json([{ state: "success", environment_url: "https://valid-id.app.workers.dev" }]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "skip-id" })).resolves.toEqual({
+      url: "https://valid-id.app.workers.dev",
+      failed: false,
+    });
+  });
+
+  it("getLatestDeploymentStatus accepts in_progress statuses with an environment_url", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 3 }]);
+      return Response.json([{ state: "in_progress", environment_url: "https://building.app.workers.dev" }]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "building" })).resolves.toEqual({
+      url: "https://building.app.workers.dev",
+      failed: false,
+    });
+  });
+
+  it("getLatestDeploymentStatus treats a latest error status as failed when nothing is pending", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 4 }]);
+      return Response.json([{ state: "error" }]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "error-state" })).resolves.toEqual({ url: null, failed: true });
+  });
+
+  it("getLatestDeploymentStatus keeps failed:false when the latest status is still in_progress without a URL", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 5 }]);
+      return Response.json([{ state: "in_progress" }]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "in-progress" })).resolves.toEqual({ url: null, failed: false });
+  });
+
+  it("getLatestDeploymentStatus treats non-array deployment and status payloads as empty", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json({ message: "unexpected" });
+      return Response.json({ message: "unexpected" });
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "shape" })).resolves.toEqual({ url: null, failed: false });
+  });
 });
 
 describe("extractPreviewUrl", () => {
