@@ -988,6 +988,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     description: "Return the maintainer queue-noise triage report for a repo: a noise score/level, the specific noise sources to clear first, and recommended maintainer actions. Maintainer-authenticated; advisory only.",
   },
   {
+    name: "loopover_get_repo_focus_manifest",
+    category: "maintainer",
+    description:
+      "Return a repo's own persisted focus manifest (.loopover.yml policy) plus its compiled policy. Read-only; maintainer/owner/operator authenticated. Distinct from loopover_validate_config (ad-hoc string validation).",
+  },
+  {
     name: "loopover_get_activation_preview",
     category: "maintainer",
     description: "Return the repo's maintainer activation preview: a deterministic run of the advisory engine over recent PRs (evaluated/with-findings counts, distinct finding codes, per-PR samples, current review-check mode, and the single recommended next action). Maintainer-authenticated; advisory only.",
@@ -1566,6 +1572,21 @@ registerStdioTool(
   async ({ owner, repo }: any) => {
     const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
     return toolResult("LoopOver maintainer noise report.", await apiGet(`${prefix}/maintainer-noise`));
+  },
+);
+
+// (#7808) CLI stdio mirror of the remote loopover_get_repo_focus_manifest — thin GET proxy of the
+// requireAppRole-gated /v1/repos/:owner/:repo/focus-manifest route (same ownerRepoShape + apiGet pattern
+// as maintainer_noise). No human CLI verb.
+registerStdioTool(
+  "loopover_get_repo_focus_manifest",
+  {
+    description: stdioToolDescription("loopover_get_repo_focus_manifest"),
+    inputSchema: ownerRepoShape,
+  },
+  async ({ owner, repo }: any) => {
+    const prefix = `/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    return toolResult("LoopOver focus manifest.", await apiGet(`${prefix}/focus-manifest`));
   },
 );
 
