@@ -214,7 +214,8 @@ describe("preview-url pagination (#7450)", () => {
       url: "https://deep-status.app.workers.dev",
       failed: false,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3); // deployments list + statuses pages 1 and 2
+    expect(fetchMock.mock.calls.some((c) => /\/deployments\/7\/statuses.*page=2/.test(String(c[0])))).toBe(true);
   });
 });
 
