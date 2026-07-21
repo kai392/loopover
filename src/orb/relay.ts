@@ -264,15 +264,20 @@ const RELAY_PENDING_BATCH_SIZE = 50;
 const RELAY_PENDING_TTL_HOURS = 24;
 const RELAY_PENDING_MAX_PER_INSTALLATION = 500;
 
-export type RelayPendingEvent = { deliveryId: string; eventName: string; rawBody: string };
+// #7523: 'kind' rides along on every pulled event so a self-host drain client can tell a config_push notice
+// apart from a GitHub webhook BEFORE treating rawBody as a GitHubWebhookPayload — see
+// src/selfhost/monitored-work.ts's drainOrbRelayWithMonitor.
+export type RelayPendingEvent = { deliveryId: string; eventName: string; rawBody: string; kind: string };
 
 // Bulk-delete drop logs (this function and retryFailedRelays below) sample at most this many rows' identifying
 // info — an operator needs to see WHICH installation(s) lost events without a direct DB query, but a busy prune
 // can span hundreds of rows, so the log payload itself must stay bounded.
 const RELAY_DROP_LOG_SAMPLE_SIZE = 20;
 
-/** Drop pull-mode rows that exceeded the raw-body retention window, even if their engine never polls. */
-async function pruneRelayPending(env: Env): Promise<number> {
+/** Drop pull-mode rows that exceeded the raw-body retention window, even if their engine never polls. Exported
+ *  (#7611 review fix) so a multi-target caller like the config-push route can prune ONCE per request instead of
+ *  once per target -- see enqueueConfigPushRelay's own doc comment below for why it no longer prunes itself. */
+export async function pruneRelayPending(env: Env): Promise<number> {
   // Sampled BEFORE the delete: a plain DELETE reports only a count, and the rows are unrecoverable once gone.
   // Same WHERE predicate as the delete below, capped so a large backlog can't inflate the log payload.
   const expiring = await env.DB
@@ -340,6 +345,49 @@ export async function enqueueRelayPending(
     .run();
 }
 
+export type ConfigPushPayload = {
+  pushId: string;
+  message: string;
+  capability?: string | undefined;
+  deprecatesAt?: string | undefined;
+};
+
+/** An Orb-operational notice (#7522, piece 1 of #4902's 3-piece design) addressed to one installation — NOT a
+ *  GitHub webhook, so unlike enqueueRelayPending above this skips coalesce-key derivation entirely (that logic
+ *  assumes `rawBody` parses as a GitHubWebhookPayload; a config_push payload never does). Still shares the same
+ *  pending queue as the webhook path — same per-installation backlog cap — since both kinds drain through the
+ *  same pull loop (`kind` is how the drain side, #7523, tells them apart before touching `rawBody`).
+ *  `deliveryId` is derived from `pushId` + `installationId` (not caller-supplied) so re-posting the same push
+ *  is idempotent per target, matching every other ON CONFLICT DO NOTHING write in this file.
+ *
+ *  Deliberately does NOT prune here (#7611 review fix): enqueueRelayPending prunes per-call because it's
+ *  invoked once per individually-arriving webhook, but this function is fanned out over up to 500
+ *  `installationIds` from a SINGLE request (POST /v1/app/fleet/config-push) — pruning inside it would turn one
+ *  request into up to 500 redundant global TTL-prune scans/deletes against the shared table. The caller prunes
+ *  ONCE before the fan-out instead (see that route's own handler). */
+export async function enqueueConfigPushRelay(env: Env, installationId: number, payload: ConfigPushPayload): Promise<void> {
+  const deliveryId = `config-push:${payload.pushId}:${installationId}`;
+  await env.DB
+    .prepare(
+      "INSERT INTO orb_relay_pending (delivery_id, installation_id, event_name, raw_body, kind) VALUES (?, ?, 'config_push', ?, 'config_push') ON CONFLICT(delivery_id) DO NOTHING",
+    )
+    .bind(deliveryId, installationId, JSON.stringify(payload))
+    .run();
+  await env.DB
+    .prepare(
+      `DELETE FROM orb_relay_pending
+       WHERE installation_id = ?
+         AND delivery_id IN (
+           SELECT delivery_id FROM orb_relay_pending
+           WHERE installation_id = ?
+           ORDER BY created_at DESC, delivery_id DESC
+           LIMIT -1 OFFSET ?
+         )`,
+    )
+    .bind(installationId, installationId, RELAY_PENDING_MAX_PER_INSTALLATION)
+    .run();
+}
+
 function relayPendingCoalesceKey(eventName: string, rawBody: string): string | null {
   try {
     return githubWebhookCoalesceKey(
@@ -381,10 +429,10 @@ export async function pullRelayPending(
       : RELAY_PENDING_BATCH_SIZE;
   const limit = Math.min(requestedLimit, RELAY_PENDING_BATCH_SIZE);
   const { results } = await env.DB
-    .prepare("SELECT delivery_id, event_name, raw_body FROM orb_relay_pending WHERE installation_id = ? ORDER BY created_at, delivery_id LIMIT ?")
+    .prepare("SELECT delivery_id, event_name, raw_body, kind FROM orb_relay_pending WHERE installation_id = ? ORDER BY created_at, delivery_id LIMIT ?")
     .bind(installationId, limit)
-    .all<{ delivery_id: string; event_name: string; raw_body: string }>();
-  return results.map((r) => ({ deliveryId: r.delivery_id, eventName: r.event_name, rawBody: r.raw_body }));
+    .all<{ delivery_id: string; event_name: string; raw_body: string; kind: string }>();
+  return results.map((r) => ({ deliveryId: r.delivery_id, eventName: r.event_name, rawBody: r.raw_body, kind: r.kind }));
 }
 
 /** Record a failed relay forward in the retry queue. Idempotent on delivery_id — a duplicate insert (e.g. from a
