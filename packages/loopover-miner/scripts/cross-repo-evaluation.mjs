@@ -22,6 +22,7 @@ export function parseCrossRepoEvaluationArgs(argv) {
   let json = false;
   let repoFilter = null;
   let requireMajority = false;
+  let fullExecution = false;
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === "--json") {
@@ -30,6 +31,10 @@ export function parseCrossRepoEvaluationArgs(argv) {
     }
     if (token === "--require-majority") {
       requireMajority = true;
+      continue;
+    }
+    if (token === "--full-execution") {
+      fullExecution = true;
       continue;
     }
     if (token === "--manifest") {
@@ -51,7 +56,7 @@ export function parseCrossRepoEvaluationArgs(argv) {
     }
     return { error: `Unknown argument: ${token}` };
   }
-  return { manifestPath, json, repoFilter, requireMajority };
+  return { manifestPath, json, repoFilter, requireMajority, fullExecution };
 }
 
 export function loadCrossRepoEvaluationManifest(manifestPath) {
@@ -59,9 +64,12 @@ export function loadCrossRepoEvaluationManifest(manifestPath) {
   return parseCrossRepoEvaluationManifest(content);
 }
 
-export function runCrossRepoEvaluationCli(options = {}) {
+export async function runCrossRepoEvaluationCli(options = {}) {
   const parsed = options.parsed ?? loadCrossRepoEvaluationManifest(options.manifestPath ?? resolveDefaultManifestPath());
-  const results = runCrossRepoEvaluation(parsed, { repoFilter: options.repoFilter ?? null });
+  const results = await runCrossRepoEvaluation(parsed, {
+    repoFilter: options.repoFilter ?? null,
+    fullExecution: options.fullExecution === true,
+  });
   const summary = summarizeCrossRepoEvaluation(results);
   return { parsed, results, summary };
 }
@@ -69,7 +77,7 @@ export function runCrossRepoEvaluationCli(options = {}) {
 function printHelp() {
   console.log(
     [
-      "loopover-miner cross-repo evaluation (#4788)",
+      "loopover-miner cross-repo evaluation (#4788 readiness / #7634 full-execution)",
       "",
       "Usage:",
       "  node packages/loopover-miner/scripts/cross-repo-evaluation.mjs [options]",
@@ -77,16 +85,19 @@ function printHelp() {
       "Options:",
       "  --manifest <path>     Benchmark manifest (default: benchmarks/cross-repo/manifest.json)",
       "  --repo <owner/repo>     Evaluate a single benchmark entry",
+      "  --full-execution        Local discover->plan->code->build->test (no forge PR writes) (#7634)",
       "  --json                  Emit machine-readable JSON on stdout",
       "  --require-majority      Exit 1 unless a strict majority of repos pass",
       "  -h, --help              Show this help",
       "",
       "Prerequisite: clone benchmark repos into LOOPOVER_MINER_REPO_CLONE_DIR (see docs/cross-repo-evaluation.md).",
+      "Full-execution never opens PRs against benchmark repos; inject runCodingAttempt or set",
+      "LOOPOVER_MINER_FULL_EXECUTION_STUB=1 for a synthetic local handoff.",
     ].join("\n"),
   );
 }
 
-function main() {
+async function main() {
   const parsedArgs = parseCrossRepoEvaluationArgs();
   if (parsedArgs.help) {
     printHelp();
@@ -97,7 +108,7 @@ function main() {
     return 2;
   }
 
-  const { parsed, results, summary } = runCrossRepoEvaluationCli(parsedArgs);
+  const { parsed, results, summary } = await runCrossRepoEvaluationCli(parsedArgs);
   if (parsedArgs.json) {
     console.log(JSON.stringify({ warnings: parsed.warnings, results, summary }, null, 2));
   } else {
@@ -112,5 +123,7 @@ function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exitCode = main();
+  main().then((code) => {
+    process.exitCode = code;
+  });
 }

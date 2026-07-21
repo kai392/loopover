@@ -1,5 +1,5 @@
 {
-  "description": "Cross-repo evaluation benchmark set (#4788). Diverse public repos exercised by `node packages/loopover-miner/scripts/cross-repo-evaluation.mjs` after cloning into LOOPOVER_MINER_REPO_CLONE_DIR.",
+  "description": "Cross-repo evaluation benchmark set (#4788 readiness / #7634 full-execution). Diverse public repos exercised by `node packages/loopover-miner/scripts/cross-repo-evaluation.mjs` after cloning into LOOPOVER_MINER_REPO_CLONE_DIR. Entries with fullExecution=true are the default --full-execution subset (dry-run: no forge PR writes).",
   "repos": [
     {
       "repoFullName": "sindresorhus/is",
@@ -8,7 +8,8 @@
     {
       "repoFullName": "expressjs/express",
       "stackHint": "nodejs",
-      "requireTestCommand": true
+      "requireTestCommand": true,
+      "fullExecution": true
     },
     {
       "repoFullName": "pallets/flask",
@@ -28,7 +29,8 @@
     {
       "repoFullName": "lodash/lodash",
       "stackHint": "nodejs",
-      "requireTestCommand": true
+      "requireTestCommand": true,
+      "fullExecution": true
     }
   ]
 }

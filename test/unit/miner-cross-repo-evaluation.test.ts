@@ -12,6 +12,7 @@ import {
   DEFAULT_CROSS_REPO_MANIFEST_RELATIVE_PATH,
   MAX_CROSS_REPO_MANIFEST_BYTES,
   formatCrossRepoEvaluationReport,
+  evaluateRepoFullExecution,
   evaluateRepoReadiness,
   normalizeCrossRepoFullName,
   parseCrossRepoEvaluationManifest,
@@ -107,7 +108,7 @@ describe("cross-repo evaluation harness (#4788)", () => {
         JSON.stringify({
           repos: [
             "acme/alpha",
-            { repoFullName: "acme/beta", stackHint: "nodejs", requireTestCommand: true },
+            { repoFullName: "acme/beta", stackHint: "nodejs", requireTestCommand: true, fullExecution: true },
             "acme/alpha",
             { repoFullName: "bad", requireTestCommand: "yes" },
             7,
@@ -117,7 +118,7 @@ describe("cross-repo evaluation harness (#4788)", () => {
       expect(parsed.present).toBe(true);
       expect(parsed.manifest.repos).toEqual([
         { repoFullName: "acme/alpha", requireTestCommand: false },
-        { repoFullName: "acme/beta", stackHint: "nodejs", requireTestCommand: true },
+        { repoFullName: "acme/beta", stackHint: "nodejs", requireTestCommand: true, fullExecution: true },
       ]);
       expect(parsed.warnings.some((w) => w.includes("duplicate"))).toBe(true);
       expect(parsed.warnings.some((w) => w.includes("invalid"))).toBe(true);
@@ -372,11 +373,11 @@ describe("cross-repo evaluation harness (#4788)", () => {
   });
 
   describe("runCrossRepoEvaluation + summarizeCrossRepoEvaluation", () => {
-    it("filters to a single repo and computes majority + category counts", () => {
+    it("filters to a single repo and computes majority + category counts", async () => {
       const parsed = parseCrossRepoEvaluationManifest(
         JSON.stringify({ repos: ["acme/a", "acme/b", "acme/c"] }),
       );
-      const results = runCrossRepoEvaluation(parsed, {
+      const results = await runCrossRepoEvaluation(parsed, {
         repoFilter: "acme/b",
         existsSync: () => false,
       });
@@ -446,9 +447,9 @@ describe("cross-repo evaluation harness (#4788)", () => {
       expect(summary.failuresByCategory.other).toBe(1);
     });
 
-    it("runCrossRepoEvaluation treats a parsed manifest without a repos list as no repos", () => {
-      expect(runCrossRepoEvaluation({} as never)).toEqual([]);
-      expect(runCrossRepoEvaluation(undefined as never)).toEqual([]);
+    it("runCrossRepoEvaluation treats a parsed manifest without a repos list as no repos", async () => {
+      expect(await runCrossRepoEvaluation({} as never)).toEqual([]);
+      expect(await runCrossRepoEvaluation(undefined as never)).toEqual([]);
     });
 
     it("summarizeCrossRepoEvaluation treats a non-array input as an empty run", () => {
@@ -495,13 +496,21 @@ describe("cross-repo evaluation harness (#4788)", () => {
         json: true,
         repoFilter: "acme/widgets",
         requireMajority: true,
+        fullExecution: false,
+      });
+      expect(parseCrossRepoEvaluationArgs(["--full-execution"])).toEqual({
+        manifestPath: resolveDefaultManifestPath(),
+        json: false,
+        repoFilter: null,
+        requireMajority: false,
+        fullExecution: true,
       });
       expect(parseCrossRepoEvaluationArgs(["--manifest"])).toEqual({ error: "Missing value for --manifest." });
       expect(parseCrossRepoEvaluationArgs(["--nope"])).toEqual({ error: "Unknown argument: --nope" });
       expect(parseCrossRepoEvaluationArgs(["--help"])).toEqual({ help: true });
     });
 
-    it("runs the harness driver against a fixture manifest", () => {
+    it("runs the harness driver against a fixture manifest", async () => {
       const repoPath = tempRepo({
         "package.json": pkg({ scripts: { test: "node --test" } }),
       });
@@ -514,7 +523,7 @@ describe("cross-repo evaluation harness (#4788)", () => {
         "utf8",
       );
 
-      const { parsed, results, summary } = runCrossRepoEvaluationCli({
+      const { parsed, results, summary } = await runCrossRepoEvaluationCli({
         manifestPath: join(manifestPath, "manifest.json"),
       });
       expect(parsed.warnings).toEqual([]);
@@ -528,10 +537,173 @@ describe("cross-repo evaluation harness (#4788)", () => {
     });
   });
 
+  describe("evaluateRepoFullExecution (#7634)", () => {
+    const readyStack = (overrides: Partial<RepoStackResult> = {}): RepoStackResult =>
+      ({
+        detected: true,
+        language: "javascript",
+        packageManager: "npm",
+        testCommand: "npm test",
+        buildCommand: "npm run build",
+        ...overrides,
+      }) as RepoStackResult;
+
+    const readyOptions = (repoPath: string, extra: Record<string, unknown> = {}) => ({
+      repoPath,
+      existsSync: () => true,
+      detectRepoStack: () => readyStack(),
+      resolveMinerGoalSpec: () => ({ present: false }),
+      buildCodingTaskSpec: () => ({ ready: true, instructions: "Fix the bug without assuming LoopOver CI." }),
+      ...extra,
+    });
+
+    it("returns readiness failures unchanged", async () => {
+      const result = await evaluateRepoFullExecution(
+        { repoFullName: "acme/missing", requireTestCommand: false },
+        { repoPath: "/tmp/missing-full-exec", existsSync: () => false },
+      );
+      expect(result.failureCategory).toBe(CROSS_REPO_FAILURE_CATEGORY.CLONE_SETUP);
+    });
+
+    it("fails execution_abandon when the coding attempt abandons", async () => {
+      const repoPath = tempRepo({ "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }) });
+      const result = await evaluateRepoFullExecution(
+        { repoFullName: "acme/abandon", requireTestCommand: true },
+        readyOptions(repoPath, {
+          runCodingAttempt: () => ({ outcome: "abandon", changedFiles: [], reason: "agent offline" }),
+        }),
+      );
+      expect(result.failureCategory).toBe(CROSS_REPO_FAILURE_CATEGORY.EXECUTION_ABANDON);
+      expect(result.reason).toContain("agent offline");
+    });
+
+    it("fails plan_formed_compile_failed when the local build fails", async () => {
+      const repoPath = tempRepo({ "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }) });
+      const result = await evaluateRepoFullExecution(
+        { repoFullName: "acme/compile", requireTestCommand: true },
+        readyOptions(repoPath, {
+          runCodingAttempt: () => ({ outcome: "handoff", changedFiles: ["src/fix.js"] }),
+          runShellCommand: ({ command }: { command: string }) =>
+            command.includes("build")
+              ? { ok: false, exitCode: 2, stderr: "tsc failed" }
+              : { ok: true, exitCode: 0 },
+        }),
+      );
+      expect(result.failureCategory).toBe(CROSS_REPO_FAILURE_CATEGORY.COMPILE_FAILED);
+    });
+
+    it("fails compiled_tests_failed when tests fail after a successful build", async () => {
+      const repoPath = tempRepo({ "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }) });
+      const result = await evaluateRepoFullExecution(
+        { repoFullName: "acme/tests", requireTestCommand: true },
+        readyOptions(repoPath, {
+          runCodingAttempt: () => ({ outcome: "handoff", changedFiles: ["src/fix.js"] }),
+          runShellCommand: ({ command }: { command: string }) =>
+            command.includes("test")
+              ? { ok: false, exitCode: 1, stderr: "1 failing" }
+              : { ok: true, exitCode: 0 },
+        }),
+      );
+      expect(result.failureCategory).toBe(CROSS_REPO_FAILURE_CATEGORY.TESTS_FAILED);
+    });
+
+    it("fails tests_passed_noop_diff when the handoff changed no files", async () => {
+      const repoPath = tempRepo({ "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }) });
+      const result = await evaluateRepoFullExecution(
+        { repoFullName: "acme/noop", requireTestCommand: true },
+        readyOptions(repoPath, {
+          runCodingAttempt: () => ({ outcome: "handoff", changedFiles: [] }),
+          runShellCommand: () => ({ ok: true, exitCode: 0 }),
+        }),
+      );
+      expect(result.failureCategory).toBe(CROSS_REPO_FAILURE_CATEGORY.NOOP_DIFF);
+    });
+
+    it("passes when handoff + build + test succeed with a non-empty diff", async () => {
+      const repoPath = tempRepo({ "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }) });
+      const result = await evaluateRepoFullExecution(
+        { repoFullName: "acme/ok", requireTestCommand: true },
+        readyOptions(repoPath, {
+          runCodingAttempt: () => ({ outcome: "handoff", changedFiles: ["src/fix.js"] }),
+          runShellCommand: () => ({ ok: true, exitCode: 0 }),
+        }),
+      );
+      expect(result.passed).toBe(true);
+      expect(result.failureCategory).toBeNull();
+    });
+
+    it("selects fullExecution-tagged repos for --full-execution runs", async () => {
+      const repoPath = tempRepo({ "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }) });
+      const parsed = parseCrossRepoEvaluationManifest(
+        JSON.stringify({
+          repos: [
+            { repoFullName: "acme/skip", requireTestCommand: true },
+            { repoFullName: "acme/one", fixturePath: repoPath, requireTestCommand: true, fullExecution: true },
+            { repoFullName: "acme/two", fixturePath: repoPath, requireTestCommand: true, fullExecution: true },
+          ],
+        }),
+      );
+      const results = await runCrossRepoEvaluation(parsed, {
+        fullExecution: true,
+        existsSync: () => true,
+        detectRepoStack: () => readyStack(),
+        resolveMinerGoalSpec: () => ({ present: false }),
+        buildCodingTaskSpec: () => ({ ready: true, instructions: "ok" }),
+        runCodingAttempt: () => ({ outcome: "handoff", changedFiles: ["a.js"] }),
+        runShellCommand: () => ({ ok: true, exitCode: 0 }),
+      });
+      expect(results.map((r) => r.repoFullName)).toEqual(["acme/one", "acme/two"]);
+      expect(results.every((r) => r.passed)).toBe(true);
+    });
+
+    it("runs the CLI full-execution driver against a fixture without forge writes", async () => {
+      const repoPathA = tempRepo({
+        "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }),
+      });
+      const repoPathB = tempRepo({
+        "package.json": pkg({ scripts: { test: "node --test", build: "echo ok" } }),
+      });
+      const manifestDir = tempRepo();
+      writeFileSync(
+        join(manifestDir, "manifest.json"),
+        JSON.stringify({
+          repos: [
+            {
+              repoFullName: "acme/full-a",
+              fixturePath: repoPathA,
+              requireTestCommand: true,
+              fullExecution: true,
+            },
+            {
+              repoFullName: "acme/full-b",
+              fixturePath: repoPathB,
+              requireTestCommand: true,
+              fullExecution: true,
+            },
+          ],
+        }),
+        "utf8",
+      );
+
+      const { results, summary } = await runCrossRepoEvaluationCli({
+        manifestPath: join(manifestDir, "manifest.json"),
+        fullExecution: true,
+      });
+      // Default coding seam abandons without STUB/injection -- still a valid dry-run path (no PR).
+      expect(results).toHaveLength(2);
+      expect(results.every((r) => r.failureCategory === CROSS_REPO_FAILURE_CATEGORY.EXECUTION_ABANDON)).toBe(true);
+      expect(summary.failed).toBe(2);
+      expect(formatCrossRepoEvaluationReport(results, summary)).toContain("execution_abandon");
+    });
+  });
+
   it("documents the harness in packages/loopover-miner/docs/cross-repo-evaluation.md", () => {
     const doc = readFileSync(join(process.cwd(), "packages/loopover-miner/docs/cross-repo-evaluation.md"), "utf8");
     expect(doc).toContain("#4788");
+    expect(doc).toContain("#7634");
     expect(doc).toContain("stack_detection_gap");
+    expect(doc).toContain("plan_formed_compile_failed");
+    expect(doc).toContain("--full-execution");
     expect(doc).toContain("cross-repo-evaluation.mjs");
     expect(doc).toContain("benchmarks/cross-repo/manifest.json");
   });
