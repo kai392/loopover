@@ -84,11 +84,13 @@ describe("loopover_plan_idea_claims stdio mirror (#6756)", () => {
   });
 
   it("returns the engine's actionable error list for a malformed submission", async () => {
-    const result = await client.callTool({ name: "loopover_plan_idea_claims", arguments: {} });
-    expect(result.isError).toBeFalsy();
-    expect((result as { structuredContent?: unknown }).structuredContent).toEqual(
-      JSON.parse(JSON.stringify(expectedPayload({}))),
-    );
+    for (const args of [{}, { ...VALID, targetRepo: { kind: "provision" } }]) {
+      const result = await client.callTool({ name: "loopover_plan_idea_claims", arguments: args as Record<string, unknown> });
+      expect(result.isError).toBeFalsy();
+      expect((result as { structuredContent?: unknown }).structuredContent).toEqual(
+        JSON.parse(JSON.stringify(expectedPayload(args))),
+      );
+    }
   });
 
   it("rejects schema-invalid input (zod)", async () => {

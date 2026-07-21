@@ -35,6 +35,20 @@ describe("POST /v1/loop/intake-idea (#6755)", () => {
     expect(payload.taskGraph.issues).toHaveLength(1);
   });
 
+  it("accepts a provision target (APR — no repo yet) for intake", async () => {
+    const env = createTestEnv();
+    const body = { ...VALID, targetRepo: { kind: "provision" } };
+    const response = await post(env, body);
+    expect(response.status).toBe(200);
+    const validated = validateIdeaSubmission(body);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) return;
+    const graph = buildTaskGraph(validated.idea);
+    await expect(response.json()).resolves.toEqual(
+      JSON.parse(JSON.stringify({ ok: true, verdict: graph.rubric.verdict, taskGraph: graph })),
+    );
+  });
+
   it("assembles the caller-supplied decomposition instead of the baseline", async () => {
     const env = createTestEnv();
     const response = await post(env, {
