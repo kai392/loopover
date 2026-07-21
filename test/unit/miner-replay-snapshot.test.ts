@@ -208,16 +208,16 @@ describe("exportReplaySnapshot (#3010)", () => {
   it("a commit at the very first commit of history: git log returns exactly one entry, no parents to walk", async () => {
     const { exec } = scriptedExec(
       happyPathScripts([
-        { match: isHistory, result: ok(`root0000${FIELD_SEP}2020-01-01T00:00:00+00:00${FIELD_SEP}initial commit\n`) },
+        { match: isHistory, result: ok(`0000001${FIELD_SEP}2020-01-01T00:00:00+00:00${FIELD_SEP}initial commit\n`) },
         { match: isTargetDate, result: ok("2020-01-01T00:00:00+00:00\n") },
         { match: isTag, result: ok("") }, // no tag can predate the very first commit
       ]),
     );
     const store = tempStore();
 
-    const snapshot = await exportReplaySnapshot({ repoPath: "/repo", repoFullName: "acme/widgets", commitSha: "root0000" }, { exec, store });
+    const snapshot = await exportReplaySnapshot({ repoPath: "/repo", repoFullName: "acme/widgets", commitSha: "0000001" }, { exec, store });
 
-    expect(snapshot.commits).toEqual([{ sha: "root0000", date: "2020-01-01T00:00:00+00:00", subject: "initial commit" }]);
+    expect(snapshot.commits).toEqual([{ sha: "0000001", date: "2020-01-01T00:00:00+00:00", subject: "initial commit" }]);
   });
 
   it("no README present at the commit: readme is null, and show is never called for a nonexistent file", async () => {
@@ -449,6 +449,6 @@ describe("openReplaySnapshotStore (#3010) — round-trip persistence", () => {
 
   it("getSnapshot returns null for an unknown (repo, commit) pair", () => {
     const store = tempStore();
-    expect(store.getSnapshot("acme/widgets", "nope")).toBeNull();
+    expect(store.getSnapshot("acme/widgets", "ffffff0")).toBeNull();
   });
 });
