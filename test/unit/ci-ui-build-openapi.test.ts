@@ -18,7 +18,8 @@ describe("UI build steps skip the redundant OpenAPI regen", () => {
 
     // @loopover/ui#build's dependsOn (turbo.json) covers the same extension + miner-extension build pair
     // the old hand-chained `&&` command ran explicitly -- see turbo.json's comment on that task.
-    expect(step).toContain("run: npx turbo run build --filter=@loopover/ui");
+    // #5963 also builds @loopover/ui-miner so Codecov Bundle Analysis has a dist to upload for it.
+    expect(step).toContain("run: npx turbo run build --filter=@loopover/ui --filter=@loopover/ui-miner");
     expect(step).not.toContain("npm run ui:build");
   });
 
@@ -29,5 +30,14 @@ describe("UI build steps skip the redundant OpenAPI regen", () => {
       "run: npm run ui:openapi:check && npm run ui:lint && npm run ui:typecheck && npm run extension:lint && npm run miner-extension:lint && npm run extension:typecheck && npm run miner-extension:typecheck && npm run extension:build && npm run miner-extension:build && npm --workspace @loopover/ui run build",
     );
     expect(workflow).not.toContain("&& npm run ui:build");
+  });
+
+  it("miner-ui-demo-deploy.yml builds the demo mode SPA on workflow_dispatch (#5963)", () => {
+    const workflow = read(".github/workflows/miner-ui-demo-deploy.yml");
+    expect(workflow).toContain("workflow_dispatch");
+    expect(workflow).toContain("npm --workspace @loopover/ui-miner run build:demo");
+    expect(workflow).toContain("npx wrangler deploy");
+    // Vite config resolution imports engine packages; build engine (+ ui-kit) before demo.
+    expect(workflow).toContain("npx turbo run build --filter=@loopover/engine --filter=@loopover/ui-kit");
   });
 });

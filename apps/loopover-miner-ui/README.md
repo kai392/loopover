@@ -1,15 +1,29 @@
 # LoopOver Miner UI
 
 Local, read-only dashboard for a laptop or fleet miner instance. It mirrors the main
-`apps/loopover-ui/` tooling versions (React 19, TanStack Router, Vite, Tailwind v4) but intentionally
-does **not** adopt that app's Cloudflare Worker deploy model or `@lovable.dev/*` scaffold dependency.
+`apps/loopover-ui/` tooling versions (React 19, TanStack Router, Vite, Tailwind v4).
 
 The miner package invariant is client-side only with no required phone-home to boot
-(`packages/loopover-miner/DEPLOYMENT.md`). This app is a plain Vite dev server / static build that a
-local miner CLI can serve later — not a Wrangler deploy target.
+(`packages/loopover-miner/DEPLOYMENT.md`). For day-to-day operator use this app is a plain Vite
+dev server / static build that a local miner CLI can serve — see “Running as a persistent
+service” below.
 
-The Phase 6 data views have shipped: an overview summary (`routes/index.tsx`, #4853) alongside dedicated
-run-history, portfolio, and ledgers views, each fed by the local read-only `/api/*` endpoints below.
+## Public demo Worker (#5963)
+
+A **demo-mode** Cloudflare Worker build exists for sales/marketing prototypes and for Codecov
+Bundle Analysis in CI. It uses the same SPA codebase with `VITE_DEMO_MODE=1` baked at build time
+(`vite build --mode demo`), so client fetchers return synthetic fixtures and no SQLite / Vite
+middleware backend is required on Cloudflare.
+
+| Command | Purpose |
+| --- | --- |
+| `npm run build:demo` (in this workspace) | Static SPA with demo mode baked in |
+| `npm run deploy:demo` | Build demo + `wrangler deploy` (needs CF credentials) |
+| `.github/workflows/miner-ui-demo-deploy.yml` | Manual `workflow_dispatch` CI deploy (mirrors `ui-deploy.yml`) |
+
+Custom domain routing is intentionally omitted until DNS is provisioned; `workers.dev` preview is
+enough for the prototype. The Worker name is `loopover-miner-ui-demo` so it never collides with
+`loopover-ui` / `loopover-api`.
 
 ## Configuration
 

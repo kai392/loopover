@@ -1,0 +1,60 @@
+name: Deploy miner-ui demo Worker
+
+# Manual deploy of the apps/loopover-miner-ui public demo (#5963). Mirrors ui-deploy.yml's
+# workflow_dispatch-only trigger so a stale or broken demo never redeploys on every commit.
+# Builds with Vite `--mode demo` (VITE_DEMO_MODE baked in vite.config.ts) so the static SPA needs no
+# SQLite / Vite middleware backend on Cloudflare.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miner-ui-demo-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy demo
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Check Cloudflare secrets
+        id: cfg
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CLOUDFLARE_API_TOKEN" ] && [ -n "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not set — building demo only, skipping deploy."
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build miner-ui demo
+        run: npx turbo run build --filter=@loopover/engine --filter=@loopover/ui-kit && npm --workspace @loopover/ui-miner run build:demo
+
+      - name: Deploy demo Worker
+        if: steps.cfg.outputs.ready == 'true'
+        working-directory: apps/loopover-miner-ui
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler deploy

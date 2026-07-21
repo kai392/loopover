@@ -35,6 +35,7 @@ describe("browser extension workspace packages (#4866)", () => {
       "npx turbo run typecheck --filter=@loopover/extension --filter=@loopover/miner-extension",
     );
     // @loopover/ui#build's dependsOn (turbo.json) covers the extension + miner-extension build pair.
-    expect(workflow).toContain("run: npx turbo run build --filter=@loopover/ui");
+    // #5963 also builds @loopover/ui-miner for Codecov Bundle Analysis.
+    expect(workflow).toContain("run: npx turbo run build --filter=@loopover/ui --filter=@loopover/ui-miner");
   });
 });

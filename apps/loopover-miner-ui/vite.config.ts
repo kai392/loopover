@@ -17,7 +17,16 @@ import { portfolioQueueApiPlugin } from "./vite-portfolio-queue-api";
 import { rankedCandidatesApiPlugin } from "./vite-ranked-candidates-api";
 import { runStateApiPlugin } from "./vite-run-state-api";
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // `--mode demo` (#5963) — bake VITE_DEMO_MODE so the static CF Worker build needs no .env file
+  // (`.env.*` is gitignored). Must be the string `"1"` to match `isDemoMode()` in demo-data.ts.
+  // Self-host `vite build` / `vite dev` leave demo mode off.
+  define:
+    mode === "demo"
+      ? {
+          "import.meta.env.VITE_DEMO_MODE": JSON.stringify("1"),
+        }
+      : undefined,
   plugins: [
     TanStackRouterVite({ target: "react", autoCodeSplitting: true }),
     react(),
@@ -48,4 +57,4 @@ export default defineConfig({
     port: 4174,
     strictPort: true,
   },
-});
+}));
