@@ -454,6 +454,14 @@ const loginShape = {
   login: z.string().min(1),
 };
 
+// #7763: mirrors remote watchIssuesShape (src/mcp/server.ts) for the stdio twin of loopover_watch_issues.
+const watchIssuesShape = {
+  login: z.string().min(1),
+  action: z.enum(["watch", "unwatch", "list"]).default("list"),
+  repoFullName: z.string().min(3).max(200).optional(),
+  labels: z.array(z.string().min(1).max(100)).max(50).optional(),
+};
+
 const loginRepoShape = {
   login: z.string().min(1),
   owner: z.string().min(1),
@@ -1234,6 +1242,12 @@ const STDIO_TOOL_DESCRIPTORS = [
     category: "discovery",
     description:
       "Inspect a contributor's open PRs on registered repos, classify queue state, and return public-safe next-step packets from cached metadata.",
+  },
+  {
+    name: "loopover_watch_issues",
+    category: "utility",
+    description:
+      "Watch repos for NEW grabbable, high-multiplier issues (maintainer-created, not WIP). action=watch subscribes a repo (optional label filter), unwatch removes it, list (default) returns your watches. When a matching issue opens you're notified via loopover_list_notifications. Self-scoped to the authenticated login.",
   },
   {
     name: "loopover_pr_outcome",
@@ -2300,6 +2314,22 @@ registerStdioTool(
   async ({ login }: any) => {
     const payload = await getOpenPrMonitor(login);
     return toolResult(openPrMonitorToolSummary(login, payload), payload);
+  },
+);
+
+// #7763: stdio twin of the remote loopover_watch_issues tool / watch CLI — same /v1/contributors/{login}/watches
+// routes; action vocab stays watch|unwatch|list (CLI uses add|remove for the same POST/DELETE).
+registerStdioTool(
+  "loopover_watch_issues",
+  {
+    description: stdioToolDescription("loopover_watch_issues"),
+    inputSchema: watchIssuesShape,
+  },
+  async (input: any) => {
+    const payload = await manageIssueWatches(input);
+    const n = (payload.watching ?? []).length;
+    const changed = payload.changed ? ` (${payload.changed})` : "";
+    return toolResult(`Watching ${n} repo(s) for new grabbable issues${changed}.`, payload);
   },
 );
 
@@ -6065,6 +6095,27 @@ function getPrOutcomes(login: any, limit: any) {
   if (limit != null) query.set("limit", String(limit));
   const suffix = query.size > 0 ? `?${query}` : "";
   return apiGet(`/v1/contributors/${encodeURIComponent(login)}/pr-outcomes${suffix}`);
+}
+
+// #7763 / #6746: shared HTTP for loopover_watch_issues stdio + `watch` CLI. MCP actions watch|unwatch|list
+// map to POST|DELETE|GET on /v1/contributors/{login}/watches.
+async function manageIssueWatches(input: {
+  login: string;
+  action?: "watch" | "unwatch" | "list";
+  repoFullName?: string;
+  labels?: string[];
+}) {
+  const action = input.action ?? "list";
+  const base = `/v1/contributors/${encodeURIComponent(input.login)}/watches`;
+  if (action === "list") return apiGet(base);
+  if (!input.repoFullName) throw new Error(`${action} requires repoFullName.`);
+  if (action === "watch") {
+    return apiPost(base, {
+      repoFullName: input.repoFullName,
+      ...(input.labels?.length ? { labels: input.labels } : {}),
+    });
+  }
+  return apiDelete(base, { repoFullName: input.repoFullName });
 }
 
 // #6745: contributor notification feed + mark-read. `postMarkNotificationsRead` sends no ids to mark all
