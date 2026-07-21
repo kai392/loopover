@@ -313,6 +313,69 @@ describe("preview-url pagination (#7450)", () => {
     });
     await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "shape" })).resolves.toEqual({ url: null, failed: false });
   });
+
+  it("getLatestDeploymentStatus keeps failed:false when one deployment failed but another is still pending", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 1 }, { id: 2 }]);
+      if (url.includes("/deployments/1/statuses")) return Response.json([{ state: "error" }]);
+      if (url.includes("/deployments/2/statuses")) return Response.json([{ state: "in_progress" }]);
+      return Response.json([]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "mixed" })).resolves.toEqual({ url: null, failed: false });
+  });
+
+  it("getLatestDeploymentStatus skips deployments without an id", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ notAnId: true }]);
+      return Response.json([]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "no-id" })).resolves.toEqual({ url: null, failed: false });
+  });
+
+  it("getLatestDeploymentStatus builds a ref-scoped deployments query when given a ref instead of a sha", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 8 }]);
+      if (url.includes("/deployments/8/statuses")) return Response.json([{ state: "success", environment_url: "https://ref.pages.dev/" }]);
+      return Response.json([]);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, ref: "feature-branch" })).resolves.toEqual({
+      url: "https://ref.pages.dev/",
+      failed: false,
+    });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes("/deployments?ref=feature-branch"))).toBe(true);
+  });
+
+  it("getLatestDeploymentStatus treats a non-array statuses payload for a deployment as empty", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 3 }]);
+      if (url.includes("/deployments/3/statuses")) return Response.json({ message: "unexpected non-array statuses shape" });
+      return Response.json([]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "bad-statuses" })).resolves.toEqual({ url: null, failed: false });
+  });
+
+  it("getLatestDeploymentStatus keeps failed:false when the latest status is queued", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 6 }]);
+      return Response.json([{ state: "queued" }]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, ref: "feature/x" })).resolves.toEqual({ url: null, failed: false });
+  });
+
+  it("getLatestDeploymentStatus treats an empty statuses page as absent without a latest state", async () => {
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/deployments?")) return Response.json([{ id: 8 }]);
+      return Response.json([]);
+    });
+    await expect(getLatestDeploymentStatus({ token: "t", repo: REPO, sha: "empty-statuses" })).resolves.toEqual({ url: null, failed: false });
+  });
 });
 
 describe("extractPreviewUrl", () => {

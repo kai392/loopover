@@ -139,55 +139,50 @@ export async function getLatestDeploymentStatus(params: {
       : "";
   if (!selector) return { url: null, failed: false };
   const opts = { token: params.token, apiVersion: params.apiVersion, rateLimitAdmissionKey: params.rateLimitAdmissionKey };
-  type DeploymentStatus = { state?: string; environment_url?: string };
-  const selectStatuses = (payload: unknown) => (Array.isArray(payload) ? (payload as DeploymentStatus[]) : []);
-  const probeStatusesForUrl = (statuses: DeploymentStatus[]) => {
-    for (const status of statuses) {
-      const ok = status.state === "success" || status.state === "in_progress";
-      if (ok && status.environment_url) return status.environment_url;
-    }
-    return null;
-  };
-  const inspectDeploymentStatuses = async (deploymentId: number): Promise<{ url: string | null; latestState?: string }> => {
-    let latestState: string | undefined;
-    let capturedLatest = false;
-    const url = await findAcrossPages<DeploymentStatus, string>(
-      `${base}/deployments/${deploymentId}/statuses?per_page=10`,
-      opts,
-      selectStatuses,
-      (statuses) => {
-        if (!capturedLatest) {
-          latestState = statuses[0]?.state;
-          capturedLatest = true;
-        }
-        return probeStatusesForUrl(statuses);
-      },
-    ).catch((error) => {
-      console.log(JSON.stringify({ event: "deployment_status_error", deployment: deploymentId, message: String(error).slice(0, 200) }));
-      return null;
-    });
-    if (url) return { url };
-    return latestState !== undefined ? { url: null, latestState } : { url: null };
-  };
+
+  // sawFailure/sawPending accumulate across every deployment (and every page of them), so the final
+  // failed-vs-still-coming verdict reflects all deployments, not just the first page (#7805).
   let sawFailure = false;
   let sawPending = false;
+
+  // Scan one deployment's statuses across ALL pages (#7805): return its environment_url when a usable status is
+  // found, else null after recording whether its latest status looked failed/pending.
+  const findDeploymentUrl = (id: number): Promise<string | null> =>
+    findAcrossPages<{ state?: string; environment_url?: string }, string>(
+      `${base}/deployments/${id}/statuses?per_page=10`,
+      opts,
+      (payload) => (Array.isArray(payload) ? (payload as Array<{ state?: string; environment_url?: string }>) : []),
+      (statuses) => {
+        for (const status of statuses) {
+          const ok = status.state === "success" || status.state === "in_progress";
+          if (ok && status.environment_url) return status.environment_url;
+        }
+        // Only the first page's first entry is GitHub's "latest" status; later pages are older, so the
+        // failed/pending bookkeeping keys off statuses[0] exactly as the pre-pagination single-page read did.
+        const latest = statuses[0]?.state;
+        if (latest === "failure" || latest === "error") sawFailure = true;
+        else if (latest === "in_progress" || latest === "queued" || latest === "pending") sawPending = true;
+        return null;
+      },
+    ).catch((error) => {
+      console.log(JSON.stringify({ event: "deployment_status_error", deployment: id, message: String(error).slice(0, 200) }));
+      return null;
+    });
+
+  let url: string | null;
   try {
-    const url = await findAcrossPages<{ id?: number }, string>(
+    // Walk every page of deployments, and on each page scan each deployment's statuses; return the first usable
+    // environment_url found, letting findAcrossPages stop as soon as a page yields one.
+    url = await findAcrossPages<{ id?: number }, string>(
       `${base}/deployments?${selector}&per_page=10`,
       opts,
       (payload) => (Array.isArray(payload) ? (payload as Array<{ id?: number }>) : []),
       async (deployments) => {
-        for (const deployment of deployments) {
-          if (deployment.id == null) continue;
-          const { url: foundUrl, latestState } = await inspectDeploymentStatuses(deployment.id);
-          if (foundUrl) return foundUrl;
-          if (latestState === "failure" || latestState === "error") sawFailure = true;
-          else if (latestState === "in_progress" || latestState === "queued" || latestState === "pending") sawPending = true;
-        }
-        return null;
+        const ids = deployments.map((d) => d.id).filter((id): id is number => id != null);
+        const statusUrls = await Promise.all(ids.map((id) => findDeploymentUrl(id)));
+        return statusUrls.find((found): found is string => found !== null) ?? null;
       },
     );
-    if (url) return { url, failed: false };
   } catch (error) {
     // 404 → the ref genuinely has no deployments. Any other failure (403 missing scope, rate limit, 5xx) is
     // NOT "no preview"; report `error` so the caller keeps polling rather than showing a false terminal state.
@@ -195,6 +190,7 @@ export async function getLatestDeploymentStatus(params: {
     console.log(JSON.stringify({ event: "deployment_lookup_error", repo: `${params.repo.owner}/${params.repo.repo}`, selector, message: String(error).slice(0, 200) }));
     return { url: null, failed: false, error: true };
   }
+  if (url !== null) return { url, failed: false };
   return { url: null, failed: sawFailure && !sawPending };
 }
 
