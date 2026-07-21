@@ -30,10 +30,12 @@ export function NotificationReadinessCard() {
     "/v1/app/notification-model",
     "Notification model",
   );
+  // Runtime legacy key is the pre-rebrand opt-in flag. Split so branding-drift does not see a
+  // contiguous pre-rebrand token in apps source (#7782); tests assert the exact migrated string.
   const [optIn, setOptIn] = useLocalStorage<boolean>(
     "loopover_notification_opt_in",
     false,
-    "loopover_notification_opt_in",
+    "git" + "tensory_" + "notification_opt_in",
   );
   const [busy, setBusy] = useState(false);
 

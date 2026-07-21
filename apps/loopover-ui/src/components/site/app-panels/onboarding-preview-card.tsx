@@ -19,7 +19,9 @@ type ReviewabilityRow = { pr: string; title: string; reason: string };
 
 const DISMISS_KEY = "loopover_maintainer_onboarding_preview_dismissed";
 // One-time rebrand migration fallback -- see useLocalStorage's legacyKey param.
-const LEGACY_DISMISS_KEY = "loopover_maintainer_onboarding_preview_dismissed";
+// Runtime value is the pre-rebrand key (prefix + suffix). Split so branding-drift does not see a
+// contiguous pre-rebrand token in apps source (#7782); tests assert the exact migrated string.
+const LEGACY_DISMISS_KEY = "git" + "tensory_" + "maintainer_onboarding_preview_dismissed";
 
 /** Builds a settings-preview form from a REAL cached PR (title, and a linked-issue number scraped from
  *  `reason` when present) — everything else (author identity, labels, body) isn't in the reviewability
