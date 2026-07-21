@@ -23,6 +23,7 @@ const ALLOWED_FILES = [
   "lib/local-branch.js",
   "lib/format-table.js",
   "lib/redact-local-path.js",
+  "lib/plan-idea-claims.js",
   "scripts/gittensor-score-preview.mjs",
   "package.json",
   "README.md",
@@ -89,7 +90,7 @@ describe("checkChangelog", () => {
 
 describe("checkTarball", () => {
   it("accepts every shipped MCP lib file previously missing from the RC allowlist (#6291)", () => {
-    for (const file of ["lib/cli-error.js", "lib/format-table.js", "lib/redact-local-path.js"]) {
+    for (const file of ["lib/cli-error.js", "lib/format-table.js", "lib/redact-local-path.js", "lib/plan-idea-claims.js"]) {
       expect(unexpectedTarballFiles([file])).toEqual([]);
       expect(MCP_PACKAGE_ALLOWED_FILE_PATTERNS.some((pattern) => pattern.test(file))).toBe(true);
     }

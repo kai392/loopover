@@ -9,6 +9,7 @@ export const MCP_PACKAGE_ALLOWED_FILE_PATTERNS = [
   /^lib\/format-table\.js$/,
   /^lib\/redact-local-path\.js$/,
   /^lib\/telemetry\.js$/,
+  /^lib\/plan-idea-claims\.js$/,
   /^scripts\/gittensor-score-preview\.(mjs|py)$/,
   /^package\.json$/,
   /^README\.md$/,
