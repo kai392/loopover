@@ -148,27 +148,26 @@ export async function getLatestDeploymentStatus(params: {
     }
     return null;
   };
-  const fetchLatestDeploymentStatusState = async (deploymentId: number): Promise<string | undefined> => {
-    try {
-      const statuses = await githubJson<DeploymentStatus[]>(`${base}/deployments/${deploymentId}/statuses?per_page=10`, opts);
-      return statuses[0]?.state;
-    } catch (error) {
-      console.log(JSON.stringify({ event: "deployment_status_error", deployment: deploymentId, message: String(error).slice(0, 200) }));
-      return undefined;
-    }
-  };
   const inspectDeploymentStatuses = async (deploymentId: number): Promise<{ url: string | null; latestState?: string }> => {
+    let latestState: string | undefined;
+    let capturedLatest = false;
     const url = await findAcrossPages<DeploymentStatus, string>(
       `${base}/deployments/${deploymentId}/statuses?per_page=10`,
       opts,
       selectStatuses,
-      probeStatusesForUrl,
+      (statuses) => {
+        if (!capturedLatest) {
+          latestState = statuses[0]?.state;
+          capturedLatest = true;
+        }
+        return probeStatusesForUrl(statuses);
+      },
     ).catch((error) => {
       console.log(JSON.stringify({ event: "deployment_status_error", deployment: deploymentId, message: String(error).slice(0, 200) }));
       return null;
     });
     if (url) return { url };
-    return { url: null, latestState: await fetchLatestDeploymentStatusState(deploymentId) };
+    return latestState !== undefined ? { url: null, latestState } : { url: null };
   };
   let sawFailure = false;
   let sawPending = false;
