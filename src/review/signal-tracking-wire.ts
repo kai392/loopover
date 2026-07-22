@@ -15,6 +15,10 @@
 import type { HumanOverrideEvent, RuleFiredEvent, SignalStore } from "@loopover/engine";
 
 import { listAuditEventsByType, recordAuditEvent } from "../db/repositories";
+import { REVIEW_THREAD_BLOCKER_CODE } from "./review-thread-findings";
+import { CLA_CONSENT_MISSING_CODE } from "./cla-check";
+import { AI_JUDGMENT_BLOCKER_CODES } from "../rules/advisory";
+import type { GateCheckEvaluation } from "../rules/advisory";
 import { nowIso } from "../utils/json";
 
 const RULE_FIRED_EVENT_TYPE_PREFIX = "signal.rule_fired:";
@@ -105,4 +109,63 @@ export function createSignalStore(env: Env): SignalStore {
       };
     },
   };
+}
+
+/** Every finding code `isConfiguredGateBlocker` (src/rules/advisory.ts) recognizes as gate-authority-bearing
+ *  (#8104) — composed from the SAME exported constants that function's own body checks
+ *  (`AI_JUDGMENT_BLOCKER_CODES`, `REVIEW_THREAD_BLOCKER_CODE`, `CLA_CONSENT_MISSING_CODE`) plus its literal
+ *  codes, so this list tracks that function rather than a second hand-maintained vocabulary. Includes
+ *  `linked_issue_scope_mismatch`: the reversal sweep below covers the FULL list (one shared loop, per #8104's
+ *  own instruction to fold #8101's single-code check into it), while the fired-recording helper excludes that
+ *  one code because #8101 already records its firings at its own upstream push site
+ *  (runLinkedIssueSatisfactionForAdvisory) — recording it here too would double-count. */
+export const GATE_BLOCKER_SIGNAL_RULE_IDS: readonly string[] = [
+  ...AI_JUDGMENT_BLOCKER_CODES,
+  REVIEW_THREAD_BLOCKER_CODE,
+  CLA_CONSENT_MISSING_CODE,
+  "missing_linked_issue",
+  "duplicate_pr_risk",
+  "secret_leak",
+  "pre_merge_check_required",
+  "manifest_missing_tests",
+  "manifest_linked_issue_required",
+  "self_authored_linked_issue",
+  "content_lane_deliverable_missing",
+  "lockfile_tamper_risk",
+  "linked_issue_scope_mismatch",
+];
+
+/**
+ * Record a {@link RuleFiredEvent} for every configured gate blocker in `evaluation` (#8104) — the generic
+ * counterpart of #8101's site-specific `linked_issue_scope_mismatch` hook, called from the gate-CONCLUSION
+ * computation (the one place every `isConfiguredGateBlocker` code becomes a real, gate-authority-bearing
+ * decision). Filtered by {@link GATE_BLOCKER_SIGNAL_RULE_IDS}, so the synthesized slop blocker and any
+ * surface-lane code never record; `linked_issue_scope_mismatch` is excluded here because #8101 already
+ * records it at its own push site — recording twice would double-count its fired history. Best-effort per
+ * finding (SignalStore's own never-fail-the-review contract): a recording failure must never affect the gate
+ * decision, and one finding's failure never skips the rest. A skipped/undefined evaluation records nothing.
+ */
+export async function recordConfiguredGateBlockerFirings(
+  env: Env,
+  repoFullName: string,
+  pullNumber: number,
+  evaluation: GateCheckEvaluation | undefined,
+): Promise<void> {
+  if (!evaluation) return;
+  const store = createSignalStore(env);
+  for (const finding of evaluation.blockers) {
+    if (finding.code === "linked_issue_scope_mismatch") continue;
+    if (!GATE_BLOCKER_SIGNAL_RULE_IDS.includes(finding.code)) continue;
+    await store
+      .recordRuleFired({
+        ruleId: finding.code,
+        targetKey: `${repoFullName}#${pullNumber}`,
+        // Defensive: `severity` is required on AdvisoryFinding, but a hand-built/legacy finding without one
+        // must still record a usable outcome rather than the string "undefined".
+        outcome: finding.severity ?? "blocker",
+        occurredAt: nowIso(),
+        ...(finding.confidence !== undefined ? { metadata: { confidence: finding.confidence } } : {}),
+      })
+      .catch(() => undefined);
+  }
 }

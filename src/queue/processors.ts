@@ -265,7 +265,7 @@ import {
 } from "../selfhost/queue-common";
 import { aiReviewCacheInputFingerprint } from "../review/ai-review-cache-input";
 import { linkedIssueSatisfactionCacheInputFingerprint } from "../review/linked-issue-satisfaction-cache-input";
-import { createSignalStore } from "../review/signal-tracking-wire";
+import { createSignalStore, recordConfiguredGateBlockerFirings } from "../review/signal-tracking-wire";
 import {
   AGENT_LABEL_NEEDS_REVIEW,
   downgradeCloseToHold,
@@ -10298,6 +10298,12 @@ async function maybePublishPrPublicSurface(
         let evaluation = shouldEvaluateGate
           ? evaluateGateCheck(advisory, gatePolicy)
           : undefined;
+        // #8104: every configured gate blocker in THIS conclusion (the one authoritative evaluation — the
+        // sweep/check-run call sites re-derive it and must not double-record) fires into the shared
+        // calibration module, mirroring #8101's site-specific linked_issue_scope_mismatch hook, which the
+        // helper excludes. Recorded BEFORE the surface lane so an overriding surface verdict never injects
+        // non-gate-blocker codes; best-effort inside the helper — never affects the gate decision.
+        await recordConfiguredGateBlockerFirings(env, repoFullName, pr.number, evaluation);
         // Deterministic content/registry surface lane (#1255) — flag-gated + per-repo allowlist, byte-identical when
         // off (evaluateWithSurfaceLane returns the generic evaluation unchanged and resolves no files). A metagraphed
         // registry-submission PR's surface verdict OVERRIDES the generic gate; the helper preserves a generic HARD
