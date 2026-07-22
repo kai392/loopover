@@ -1409,3 +1409,138 @@ describe("recordReversalSignals — linked_issue_scope_mismatch override (#8101)
     vi.restoreAllMocks();
   });
 });
+
+// ── #8123: owner-close of an AI-held PR records a "confirmed" override ──────────────────────────────────────
+
+describe("recordReversalSignals — aiReviewLowConfidenceHold confirmation (#8123)", () => {
+  const AI_RULE = "ai_consensus_defect";
+
+  async function seedAiFiredSignal(env: Env, targetKey: string, ruleId = AI_RULE): Promise<void> {
+    await createSignalStore(env).recordRuleFired({
+      ruleId,
+      targetKey,
+      outcome: "critical",
+      occurredAt: new Date().toISOString(),
+      metadata: { confidence: 0.61 },
+    });
+  }
+
+  function closeEvent(senderLogin: string, number = 7, senderType = "User") {
+    return {
+      action: "closed",
+      repository: { name: "repo", full_name: "owner/repo", owner: { login: "owner" } },
+      pull_request: pullRequestPayload({ number, state: "closed", merged_at: null }),
+      sender: { login: senderLogin, type: senderType },
+    };
+  }
+
+  it("records a 'confirmed' override for the AI-judgment rule that fired when the OWNER closes the held PR un-merged", async () => {
+    const env = createTestEnv();
+    await seedAiFiredSignal(env, "owner/repo#7");
+
+    await recordReversalSignals(env, "pull_request", closeEvent("owner"));
+
+    const history = await createSignalStore(env).queryRuleHistory(AI_RULE, 0);
+    expect(history.overrides).toMatchObject([{ ruleId: AI_RULE, targetKey: "owner/repo#7", verdict: "confirmed" }]);
+    // The sibling AI code that never fired for this target records nothing.
+    expect((await createSignalStore(env).queryRuleHistory("ai_review_split", 0)).overrides).toEqual([]);
+  });
+
+  it("records BOTH AI-judgment codes' confirmations when both fired for the target", async () => {
+    const env = createTestEnv();
+    await seedAiFiredSignal(env, "owner/repo#7", "ai_consensus_defect");
+    await seedAiFiredSignal(env, "owner/repo#7", "ai_review_split");
+
+    await recordReversalSignals(env, "pull_request", closeEvent("owner"));
+
+    expect((await createSignalStore(env).queryRuleHistory("ai_consensus_defect", 0)).overrides).toHaveLength(1);
+    expect((await createSignalStore(env).queryRuleHistory("ai_review_split", 0)).overrides).toHaveLength(1);
+  });
+
+  it("records NOTHING when a CONTRIBUTOR closes the same PR — owner-only, mirroring the reversed side's split", async () => {
+    const env = createTestEnv();
+    await seedAiFiredSignal(env, "owner/repo#7");
+
+    await recordReversalSignals(env, "pull_request", closeEvent("contributor"));
+
+    expect((await createSignalStore(env).queryRuleHistory(AI_RULE, 0)).overrides).toEqual([]);
+  });
+
+  it("records NOTHING for a Bot-sent close — the bot completing its own close is never a human judgment", async () => {
+    const env = createTestEnv();
+    await seedAiFiredSignal(env, "owner/repo#7");
+
+    await recordReversalSignals(env, "pull_request", closeEvent("owner", 7, "Bot"));
+
+    expect((await createSignalStore(env).queryRuleHistory(AI_RULE, 0)).overrides).toEqual([]);
+  });
+
+  it("records NOTHING when the owner closes a PR no AI-judgment rule ever fired against (not held via aiReviewLowConfidenceHold)", async () => {
+    const env = createTestEnv();
+    // A NON-AI rule fired for this target; only the two AI-judgment codes may confirm on an owner close.
+    await createSignalStore(env).recordRuleFired({
+      ruleId: "secret_leak",
+      targetKey: "owner/repo#7",
+      outcome: "critical",
+      occurredAt: new Date().toISOString(),
+    });
+
+    await recordReversalSignals(env, "pull_request", closeEvent("owner"));
+
+    expect((await createSignalStore(env).queryRuleHistory("secret_leak", 0)).overrides).toEqual([]);
+    expect((await createSignalStore(env).queryRuleHistory(AI_RULE, 0)).overrides).toEqual([]);
+  });
+
+  it("records NOTHING when the AI rule fired only against a DIFFERENT target (no matching fired event)", async () => {
+    const env = createTestEnv();
+    await seedAiFiredSignal(env, "owner/repo#99");
+
+    await recordReversalSignals(env, "pull_request", closeEvent("owner"));
+
+    const history = await createSignalStore(env).queryRuleHistory(AI_RULE, 0);
+    expect(history.overrides).toEqual([]);
+  });
+
+  it("degrades silently when the SignalStore read rejects: nothing throws and the close handling is unaffected", async () => {
+    const env = createTestEnv();
+    vi.spyOn(signalTrackingWire, "createSignalStore").mockReturnValue({
+      recordRuleFired: async () => undefined,
+      recordHumanOverride: async () => undefined,
+      queryRuleHistory: async () => {
+        throw new Error("signal store down");
+      },
+    });
+
+    await expect(recordReversalSignals(env, "pull_request", closeEvent("owner"))).resolves.toBeUndefined();
+    vi.restoreAllMocks();
+  });
+});
+
+describe("recordReversalSignals — #8123 defensive guard arms", () => {
+  it("records nothing for a senderless close event (no crash on a missing sender)", async () => {
+    const env = createTestEnv();
+    await createSignalStore(env).recordRuleFired({
+      ruleId: "ai_consensus_defect",
+      targetKey: "owner/repo#7",
+      outcome: "critical",
+      occurredAt: new Date().toISOString(),
+    });
+    await recordReversalSignals(env, "pull_request", {
+      action: "closed",
+      repository: { name: "repo", full_name: "owner/repo", owner: { login: "owner" } },
+      pull_request: pullRequestPayload({ number: 7, state: "closed", merged_at: null }),
+    });
+    expect((await createSignalStore(env).queryRuleHistory("ai_consensus_defect", 0)).overrides).toEqual([]);
+  });
+
+  it("records nothing when the repo full name yields an empty owner segment", async () => {
+    const env = createTestEnv();
+    await recordReversalSignals(env, "pull_request", {
+      action: "closed",
+      repository: { name: "repo", full_name: "/repo", owner: { login: "" } },
+      pull_request: pullRequestPayload({ number: 7, state: "closed", merged_at: null }),
+      sender: { login: "owner", type: "User" },
+    });
+    expect((await createSignalStore(env).queryRuleHistory("ai_consensus_defect", 0)).overrides).toEqual([]);
+  });
+});

@@ -24,6 +24,7 @@
 // once a repo's merge precision actually drops below the floor over a real sample.
 
 import { recordAuditEvent } from "../db/repositories";
+import { AI_JUDGMENT_BLOCKER_CODES } from "../rules/advisory";
 import { createSignalStore } from "./signal-tracking-wire";
 import { tryEnqueueDecisionPackRebuild } from "../services/decision-pack";
 import { incr } from "../selfhost/metrics";
@@ -499,6 +500,23 @@ export async function recordReversalSignals(
   if (!pr?.number || !repoFullName) return;
   const project = repoFullName.slice(0, 200);
 
+  // #8123 (implements #8106's decision): the OWNER manually closing an un-merged PR is the "confirmed"
+  // counterpart of the reopen reversal below — completing the close an aiReviewLowConfidenceHold suppressed
+  // IS the explicit human judgment that the sub-floor AI-judgment finding was RIGHT. Detection is by
+  // construction: a bot-executed close arrives with a Bot sender (excluded), so an owner-sent close of a
+  // target an AI_JUDGMENT_BLOCKER_CODES rule fired against can only be the manual completion of that held
+  // would-close; a contributor closing their own PR is not a maintainer judgment and records nothing
+  // (mirroring this function's own owner/contributor split on the reversed side). Best-effort like every
+  // signal write here — must never affect the close handling itself.
+  if (payload.action === "closed" && !pr.merged_at) {
+    const ownerLogin = (repoFullName.split("/")[0] || "").toLowerCase();
+    const senderLogin = (payload.sender?.login || "").toLowerCase();
+    if (payload.sender?.type === "Bot") return;
+    if (!ownerLogin || !senderLogin || ownerLogin !== senderLogin) return;
+    await recordAiJudgmentHoldConfirmations(env, reviewAuditTargetId(repoFullName, pr.number)).catch(() => undefined);
+    return;
+  }
+
   // A bot-CLOSED PR REOPENED by a human — the genuine "disagreed with this close" signal.
   if (payload.action === "reopened") {
     const ownerLogin = (repoFullName.split("/")[0] || "").toLowerCase();
@@ -591,6 +609,32 @@ export async function recordReversalSignals(
         revertPullNumber: pr.number,
       },
     }).catch(() => undefined);
+  }
+}
+
+// #8123: the AI-judgment codes are the only hold-attributable ruleIds today — aiReviewLowConfidenceHold is
+// produced specifically for a sub-floor ai_consensus_defect/ai_review_split finding, while
+// migrationCollisionHold/unlinkedIssueMatchHold carry no ruleId-equivalent the calibration module could key
+// on (explicitly out of scope until/unless they're given one). Same fixed 30-day lookback as the reversed
+// side's sweep. Each code fails independently: like every write in this file, a SignalStore failure
+// (including a queryRuleHistory read error, which deliberately propagates) must never affect the close
+// handling, and one code's failed lookup must never skip the other's judgment.
+const AI_JUDGMENT_CONFIRMATION_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function recordAiJudgmentHoldConfirmations(env: Env, targetId: string): Promise<void> {
+  const store = createSignalStore(env);
+  const sinceMs = Date.now() - AI_JUDGMENT_CONFIRMATION_LOOKBACK_MS;
+  for (const ruleId of AI_JUDGMENT_BLOCKER_CODES) {
+    await (async () => {
+      const history = await store.queryRuleHistory(ruleId, sinceMs);
+      if (!history.fired.some((event) => event.targetKey === targetId)) return;
+      await store.recordHumanOverride({
+        ruleId,
+        targetKey: targetId,
+        verdict: "confirmed",
+        occurredAt: nowIso(),
+      });
+    })().catch(() => undefined);
   }
 }
 
