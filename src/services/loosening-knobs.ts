@@ -143,3 +143,69 @@ function compareOnSlice(ruleId: string, slice: readonly BacktestCase[], currentV
   const proposed = scoreBacktest(ruleId, slice, buildConfidenceThresholdClassifier(candidate));
   return compareBacktestScores(baseline, proposed);
 }
+
+/** Where the best-supported alternative sits relative to the LIVE value (#8212). `"shipped"` wins the label
+ *  whenever the dominating alternative IS the shipped value — the consumer's message there is "revert to
+ *  shipped", not a generic direction. A `"looser"` winner duplicates the loosening loop's own proposal
+ *  (informational); a `"tighter"` winner means the live config is likely stale (actionable warning). */
+export type KnobDriftDirection = "looser" | "tighter" | "shipped";
+
+export type KnobDriftReport = {
+  knobId: string;
+  ruleId: string;
+  liveValue: number;
+  bestValue: number;
+  direction: KnobDriftDirection;
+  visibleCases: number;
+  heldOutCases: number;
+  visible: BacktestComparison;
+  heldOut: BacktestComparison;
+  /** Caller-supplied evaluation clock, echoed (never read internally) — same purity discipline as the rest
+   *  of this module: identical inputs (this value included) always yield the identical report. */
+  evaluatedAtMs: number;
+};
+
+/**
+ * Evaluate whether the LIVE value of `knob` is still the best-supported setting (#8212, epic #8211 track A)
+ * — the inverse operator question to {@link evaluateKnobLoosening}: not "can we loosen?", but "does ANY
+ * registry alternative (every candidate plus the shipped value, in either direction) strictly dominate what
+ * is currently live?". A TIGHTER dominating alternative is exactly the stale-config signal the #8170 retro
+ * identified. Same discipline as the loosening gate, verbatim: the knob's own seeded split, the same Pareto
+ * floor (`compareBacktestScores` via {@link compareOnSlice}), the same never-on-noise sample minimums, and
+ * a hard-minimum floor no evidence can cross. Alternatives are tried nearest-to-live first (ties broken
+ * toward the lower value, deterministically), so the smallest evidence-cleared correction wins. Null — never
+ * a guess — when the corpus misses the knob's sample floors or nothing strictly `"improved"`s the visible
+ * split while non-`"regressed"`ing the held-out split. Pure and deterministic.
+ */
+export function evaluateKnobDrift(
+  knob: LoosenableKnob,
+  cases: readonly BacktestCase[],
+  liveValue: number = knob.shippedValue,
+  nowMs = 0,
+): KnobDriftReport | null {
+  const { visible, heldOut } = splitBacktestCorpus(cases, knob.heldOutFraction, knob.splitSeed);
+  if (visible.length < knob.minVisibleCases || heldOut.length < knob.minHeldOutCases) return null;
+
+  const alternatives = [...new Set([...knob.candidates, knob.shippedValue])]
+    .filter((value) => value !== liveValue && value >= knob.hardMinimum)
+    .sort((a, b) => Math.abs(a - liveValue) - Math.abs(b - liveValue) || a - b);
+  for (const alternative of alternatives) {
+    const visibleComparison = compareOnSlice(knob.ruleId, visible, liveValue, alternative);
+    if (visibleComparison.verdict !== "improved") continue;
+    const heldOutComparison = compareOnSlice(knob.ruleId, heldOut, liveValue, alternative);
+    if (heldOutComparison.verdict === "regressed") continue;
+    return {
+      knobId: knob.knobId,
+      ruleId: knob.ruleId,
+      liveValue,
+      bestValue: alternative,
+      direction: alternative === knob.shippedValue ? "shipped" : alternative < liveValue ? "looser" : "tighter",
+      visibleCases: visible.length,
+      heldOutCases: heldOut.length,
+      visible: visibleComparison,
+      heldOut: heldOutComparison,
+      evaluatedAtMs: nowMs,
+    };
+  }
+  return null;
+}

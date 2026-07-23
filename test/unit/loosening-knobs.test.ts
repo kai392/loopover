@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { splitBacktestCorpus, type BacktestCase } from "@loopover/engine";
-import { evaluateKnobLoosening, LOOSENABLE_KNOBS, type LoosenableKnob } from "../../src/services/loosening-knobs";
+import { evaluateKnobDrift, evaluateKnobLoosening, LOOSENABLE_KNOBS, type LoosenableKnob } from "../../src/services/loosening-knobs";
 import {
   SATISFACTION_FLOOR_HARD_MINIMUM,
   SATISFACTION_FLOOR_HELD_OUT_FRACTION,
@@ -132,5 +132,123 @@ describe("buildReportOnlyKnobRecs (#8159)", () => {
     expect(recs[0]!.message).toContain("no override consumer yet");
     expect(recs[0]!.overridePayload).toBeUndefined();
     expect(buildReportOnlyKnobRecs([])).toEqual([]);
+  });
+});
+
+// ── #8212: config-drift evaluation (epic #8211 track A) ─────────────────────────────────────────────────────
+
+describe("evaluateKnobDrift (#8212)", () => {
+  // Live value loosened to the hard minimum; humans have been REVERSING firings in the 0.85–0.9 band, so the
+  // TIGHTER candidate 0.9 classifies them correctly while live 0.85 misses them — the stale-config signal.
+  function tighterFriendlyCorpus(): BacktestCase[] {
+    const cases: BacktestCase[] = [];
+    for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.87, "reversed"));
+    for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.87, "reversed"));
+    // A deep-low reversed anchor per slice keeps a baseline true positive in every comparison.
+    cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+    cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+    return cases;
+  }
+
+  it("reports a TIGHTER dominating alternative from a loosened live value — the stale-config signal", () => {
+    const report = evaluateKnobDrift(AI_KNOB, tighterFriendlyCorpus(), AI_KNOB.hardMinimum, 1234);
+    expect(report).not.toBeNull();
+    expect(report!.bestValue).toBe(0.9); // nearest alternative to live 0.85 that clears both splits
+    expect(report!.direction).toBe("tighter");
+    expect(report!.liveValue).toBe(AI_KNOB.hardMinimum);
+    expect(report!.visible.verdict).toBe("improved");
+    expect(report!.heldOut.verdict).not.toBe("regressed");
+    expect(report!.visibleCases).toBeGreaterThanOrEqual(AI_KNOB.minVisibleCases);
+    expect(report!.heldOutCases).toBeGreaterThanOrEqual(AI_KNOB.minHeldOutCases);
+    expect(report!.evaluatedAtMs).toBe(1234);
+  });
+
+  it("reports a LOOSER dominating alternative from the shipped default — duplicating the loosening loop's own proposal", () => {
+    const report = evaluateKnobDrift(AI_KNOB, aiLooseningFriendlyCorpus());
+    expect(report).not.toBeNull();
+    expect(report!.liveValue).toBe(AI_KNOB.shippedValue); // default liveValue arm
+    expect(report!.bestValue).toBe(0.9);
+    expect(report!.direction).toBe("looser");
+    // Deterministic: byte-identical inputs yield the byte-identical report.
+    expect(evaluateKnobDrift(AI_KNOB, aiLooseningFriendlyCorpus())).toEqual(report);
+  });
+
+  it("labels the winner 'shipped' when the shipped value itself dominates a drifted live value", () => {
+    // Humans reversed firings in the 0.90–0.93 band: only shipped 0.93 catches them; candidate 0.9 (tried
+    // first, nearer to live 0.85) leaves them exactly as live does and is passed over as non-improving.
+    const cases: BacktestCase[] = [];
+    for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.91, "reversed"));
+    for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.91, "reversed"));
+    cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+    cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+
+    const report = evaluateKnobDrift(AI_KNOB, cases, AI_KNOB.hardMinimum);
+    expect(report).not.toBeNull();
+    expect(report!.bestValue).toBe(AI_KNOB.shippedValue);
+    expect(report!.direction).toBe("shipped");
+  });
+
+  it("returns null — never a guess — when no alternative dominates the live value", () => {
+    // High-confidence confirmed cases classify identically under every threshold: nothing can improve.
+    const flat = [
+      ...visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6).map((key) => aiCase(key, 0.99, "confirmed")),
+      ...heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3).map((key) => aiCase(key, 0.99, "confirmed")),
+    ];
+    expect(evaluateKnobDrift(AI_KNOB, flat)).toBeNull();
+  });
+
+  it("returns null below the visible-sample floor and below the held-out floor, independently", () => {
+    const thinVisible = [
+      ...visibleKeys.slice(0, AI_KNOB.minVisibleCases - 1).map((key) => aiCase(key, 0.87, "reversed")),
+      ...heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3).map((key) => aiCase(key, 0.87, "reversed")),
+    ];
+    expect(evaluateKnobDrift(AI_KNOB, thinVisible, AI_KNOB.hardMinimum)).toBeNull();
+    const thinHeldOut = [
+      ...visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6).map((key) => aiCase(key, 0.87, "reversed")),
+      ...heldOutKeys.slice(0, AI_KNOB.minHeldOutCases - 1).map((key) => aiCase(key, 0.87, "reversed")),
+    ];
+    expect(evaluateKnobDrift(AI_KNOB, thinHeldOut, AI_KNOB.hardMinimum)).toBeNull();
+  });
+
+  it("rejects an alternative that improves the visible split but regresses held-out — and stays null when every alternative does", () => {
+    // Visible slice supports tightening (reversed labels at 0.87); the held-out slice punishes it (the same
+    // band CONFIRMED there — any tighter threshold manufactures false positives on held-out).
+    const cases: BacktestCase[] = [];
+    for (const key of visibleKeys.slice(0, AI_KNOB.minVisibleCases + 6)) cases.push(aiCase(key, 0.87, "reversed"));
+    for (const key of heldOutKeys.slice(0, AI_KNOB.minHeldOutCases + 3)) cases.push(aiCase(key, 0.87, "confirmed"));
+    cases.push(aiCase(visibleKeys[AI_KNOB.minVisibleCases + 10]!, 0.5, "reversed"));
+    cases.push(aiCase(heldOutKeys[AI_KNOB.minHeldOutCases + 6]!, 0.5, "reversed"));
+
+    expect(evaluateKnobDrift(AI_KNOB, cases, AI_KNOB.hardMinimum)).toBeNull();
+  });
+
+  it("filters alternatives below the hard minimum and breaks equidistant ties toward the lower value, deterministically", () => {
+    const syntheticKnob: LoosenableKnob = {
+      knobId: "synthetic_drift_knob",
+      ruleId: AI_KNOB.ruleId,
+      shippedValue: 0.6,
+      candidates: [0.4, 0.2],
+      hardMinimum: 0.3,
+      minVisibleCases: 2,
+      minHeldOutCases: 1,
+      heldOutFraction: AI_KNOB.heldOutFraction,
+      splitSeed: AI_KNOB.splitSeed, // reuse the probed membership under the same seed/rule
+      applyMode: "report_only",
+      overrideFlagKey: "synthetic_drift_knob_override",
+      looseningEventType: "calibration.synthetic_drift_knob",
+      autotuneEnvVar: "SYNTHETIC_DRIFT_KNOB_AUTOTUNE_ENABLED",
+    };
+    // From live 0.5 the alternative set is {0.4, 0.6} (0.2 is below the hard minimum and never evaluated) —
+    // an exact-distance tie, ordered [0.4, 0.6]. The 0.55-band reversed labels mean only shipped 0.6 improves.
+    const cases: BacktestCase[] = [
+      ...visibleKeys.slice(0, 4).map((key) => aiCase(key, 0.55, "reversed")),
+      ...heldOutKeys.slice(0, 2).map((key) => aiCase(key, 0.55, "reversed")),
+      aiCase(visibleKeys[10]!, 0.1, "reversed"),
+      aiCase(heldOutKeys[6]!, 0.1, "reversed"),
+    ];
+    const report = evaluateKnobDrift(syntheticKnob, cases, 0.5);
+    expect(report).not.toBeNull();
+    expect(report!.bestValue).toBe(0.6);
+    expect(report!.direction).toBe("shipped");
   });
 });
