@@ -38,6 +38,7 @@ import { LOOPOVER_GATE_CHECK_NAME } from "../review/check-names";
 import { CLA_CHECK_UNRESOLVED_CODE, CLA_CONSENT_MISSING_CODE } from "../review/cla-check";
 import { REVIEW_THREAD_BLOCKER_CODE } from "../review/review-thread-findings";
 import { createSignalStore } from "../review/signal-tracking-wire";
+import { MAX_AI_REVIEW_DIFF_CHARS } from "../services/ai-review";
 import { labelMatchesPattern } from "../scoring/preview";
 
 export type GateCheckConclusion = "success" | "failure" | "action_required" | "neutral" | "skipped";
@@ -187,6 +188,22 @@ export const CONFIGURED_GATE_BLOCKER_SIGNAL_CODES: readonly string[] = Object.fr
 
 /** Fixed lookback for reversal→HumanOverrideEvent pairing (#8104) — 30 days in milliseconds. */
 export const CONFIGURED_GATE_BLOCKER_SIGNAL_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Codes whose fired events must NEVER carry raw context (#8130): capturing the diff that triggered a
+ *  `secret_leak` finding would store the leaked credential itself in the calibration audit trail — a real
+ *  security regression, not an acceptable tradeoff for backtest coverage. Named + exported (not an inline
+ *  check buried in a loop) so a future sensitive code is added here deliberately, with this precedent,
+ *  instead of re-deriving the reasoning from scratch or missing it. */
+export const RAW_CONTEXT_EXCLUDED_CODES: ReadonlySet<string> = new Set(["secret_leak"]);
+
+/** Codes whose detection genuinely evaluates the PR's DIFF TEXT (#8130 audit): the two AI-judgment reviews
+ *  judge the unified diff itself (LoopOverAiReviewInput.diff), and the lockfile-tamper scan reads lockfile
+ *  patch hunks. Every other configured blocker evaluates a non-diff signal — linked-issue refs
+ *  (missing/manifest/self-authored), sibling-PR overlap (duplicate_pr_risk), configured title/label phrases
+ *  (pre_merge_check_required), changed PATHS not patch text (manifest_missing_tests), review-thread state,
+ *  a CLA check-run conclusion, content-lane deliverables — so their fired events carry the finding's own
+ *  rendered `detail` (the detection's evaluated signal) instead of a diff forced into their metadata. */
+export const DIFF_EVALUATING_BLOCKER_CODES: ReadonlySet<string> = new Set([...AI_JUDGMENT_BLOCKER_CODES, "lockfile_tamper_risk"]);
 
 /** True when the gate FAILED *solely* because of AI-judgment blockers (every blocker is an AI-judgment code).
  *  An empty blocker list is NOT an AI-judgment-only failure. PURE. */
@@ -1053,12 +1070,33 @@ function isConfiguredGateBlocker(finding: AdvisoryFinding, policy: GateCheckPoli
   return false;
 }
 
+/** Build the fired-event metadata for one configured blocker (#8104 confidence + #8130 raw context).
+ *  `secret_leak` (RAW_CONTEXT_EXCLUDED_CODES) never carries raw content; a diff-evaluating code stores the
+ *  bounded AI-review diff it judged (when the caller had one in scope); every other code stores the
+ *  finding's own rendered `detail` — the detection's evaluated signal — under `rawSignal`, same bound.
+ *  Returns undefined when nothing is captured, preserving the omit-empty-metadata discipline. */
+function configuredGateBlockerFiredMetadata(finding: AdvisoryFinding, aiReviewDiff: string | undefined): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = {
+    ...(finding.confidence !== undefined ? { confidence: finding.confidence } : {}),
+  };
+  if (!RAW_CONTEXT_EXCLUDED_CODES.has(finding.code)) {
+    if (DIFF_EVALUATING_BLOCKER_CODES.has(finding.code)) {
+      if (aiReviewDiff !== undefined) metadata.diff = aiReviewDiff.slice(0, MAX_AI_REVIEW_DIFF_CHARS);
+    } else {
+      metadata.rawSignal = finding.detail.slice(0, MAX_AI_REVIEW_DIFF_CHARS);
+    }
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 /**
  * Record a {@link RuleFiredEvent} for every finding that `isConfiguredGateBlocker` would put into
  * `configuredBlockers`, excluding `linked_issue_scope_mismatch` (#8104 / complements #8101). Call from the
  * env-bearing gate path immediately after {@link evaluateGateCheck} with the SAME advisory + policy so the
- * filter matches `evaluateGateCheckCore`'s own. Best-effort: a SignalStore failure never throws and never
- * affects the gate verdict.
+ * filter matches `evaluateGateCheckCore`'s own. `aiReviewDiff` (#8130) is the bounded unified diff the AI
+ * review judged (LoopOverAiReviewInput.diff), threaded from the caller's already-resolved files — see
+ * {@link configuredGateBlockerFiredMetadata} for how each code's raw context is (or is deliberately not)
+ * captured. Best-effort: a SignalStore failure never throws and never affects the gate verdict.
  */
 export async function recordConfiguredGateBlockerSignals(
   env: Env,
@@ -1066,6 +1104,7 @@ export async function recordConfiguredGateBlockerSignals(
   policy: GateCheckPolicy,
   repoFullName: string,
   prNumber: number,
+  aiReviewDiff?: string,
 ): Promise<void> {
   const effective = applyMergeReadinessGate(policy);
   const configuredBlockers = advisoryResult.findings.filter((finding) => isConfiguredGateBlocker(finding, effective));
@@ -1075,13 +1114,14 @@ export async function recordConfiguredGateBlockerSignals(
   await Promise.all(
     configuredBlockers.map((finding) => {
       if (finding.code === "linked_issue_scope_mismatch") return Promise.resolve();
+      const metadata = configuredGateBlockerFiredMetadata(finding, aiReviewDiff);
       return store
         .recordRuleFired({
           ruleId: finding.code,
           targetKey,
           outcome: finding.severity ?? "blocker",
           occurredAt,
-          ...(finding.confidence !== undefined ? { metadata: { confidence: finding.confidence } } : {}),
+          ...(metadata !== undefined ? { metadata } : {}),
         })
         .catch(() => undefined);
     }),

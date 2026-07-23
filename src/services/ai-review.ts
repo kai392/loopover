@@ -839,6 +839,10 @@ export function isIncoherentDiffBail(text: string): boolean {
 // test/unit/ai-review.test.ts's "never trims grounding" regression test).
 const AGGREGATE_CONTEXT_BUDGET_CHARS = 240_000;
 
+/** The AI review's own diff bound. Exported (#8130) so the calibration fired-event capture reuses THIS number
+ *  for the raw context it stores, instead of drifting behind a second hand-maintained limit. */
+export const MAX_AI_REVIEW_DIFF_CHARS = 120_000;
+
 /**
  * Priority-ordered cutoff (#3900): walk the optional sections highest-priority-first, including each while it
  * still fits under the remaining budget, and stop entirely (dropping this section AND every lower-priority
@@ -874,7 +878,7 @@ function buildUserPrompt(input: LoopOverAiReviewInput): string {
     // Widened 60k→120k so a large multi-file PR is actually reviewed in full (tuned against the legacy 120B
     // Workers-AI pair's 128k context window; pairing this with the higher output ceiling gives a thorough
     // review — self-host reviewers are configured with at least as much room). (#extensive-reviews)
-    input.diff.slice(0, 120000),
+    input.diff.slice(0, MAX_AI_REVIEW_DIFF_CHARS),
   ];
   // Convergence (grounding): the FINISHED CI status + FULL file content when the caller supplied them (flag
   // LOOPOVER_REVIEW_GROUNDING on). Absent/empty (the default) → the prompt is byte-identical to today.

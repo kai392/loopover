@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DIFF_EVALUATING_BLOCKER_CODES,
+  RAW_CONTEXT_EXCLUDED_CODES,
   recordConfiguredGateBlockerSignals,
   type GateCheckPolicy,
 } from "../../src/rules/advisory";
+import { MAX_AI_REVIEW_DIFF_CHARS } from "../../src/services/ai-review";
 import * as signalTrackingWire from "../../src/review/signal-tracking-wire";
 import { createSignalStore } from "../../src/review/signal-tracking-wire";
 import type { Advisory, AdvisoryFinding } from "../../src/types";
@@ -163,5 +166,112 @@ describe("recordConfiguredGateBlockerSignals (#8104)", () => {
         7,
       ),
     ).resolves.toBeUndefined();
+  });
+});
+
+// ── #8130: bounded raw context on the fired events ──────────────────────────────────────────────────────────
+
+describe("recordConfiguredGateBlockerSignals — raw context capture (#8130)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("captures the bounded AI-review diff for a diff-evaluating code, truncating an over-limit diff", async () => {
+    const env = createTestEnv();
+    const longDiff = "d".repeat(MAX_AI_REVIEW_DIFF_CHARS + 500);
+    await recordConfiguredGateBlockerSignals(
+      env,
+      advisory([finding({ code: "ai_consensus_defect", confidence: 0.95 })]),
+      blockAi,
+      "owner/repo",
+      7,
+      longDiff,
+    );
+    const [fired] = (await createSignalStore(env).queryRuleHistory("ai_consensus_defect", 0)).fired;
+    const metadata = fired?.metadata as Record<string, string | number>;
+    expect(metadata.confidence).toBe(0.95);
+    expect(metadata.diff).toBe(longDiff.slice(0, MAX_AI_REVIEW_DIFF_CHARS));
+    expect(metadata.diff).toHaveLength(MAX_AI_REVIEW_DIFF_CHARS);
+  });
+
+  it("captures the diff for lockfile_tamper_risk — the audited third diff-evaluating code", async () => {
+    const env = createTestEnv();
+    await recordConfiguredGateBlockerSignals(
+      env,
+      advisory([finding({ code: "lockfile_tamper_risk" })]),
+      { lockfileIntegrityGateMode: "block" },
+      "owner/repo",
+      7,
+      "@@ -1 +1 @@ lockfile hunk",
+    );
+    const [fired] = (await createSignalStore(env).queryRuleHistory("lockfile_tamper_risk", 0)).fired;
+    expect((fired?.metadata as Record<string, string>).diff).toBe("@@ -1 +1 @@ lockfile hunk");
+  });
+
+  it("records a diff-evaluating code WITHOUT a diff field when the caller had no diff in scope", async () => {
+    const env = createTestEnv();
+    await recordConfiguredGateBlockerSignals(
+      env,
+      advisory([finding({ code: "ai_review_split", confidence: 0.7 })]),
+      blockAi,
+      "owner/repo",
+      7,
+    );
+    const [fired] = (await createSignalStore(env).queryRuleHistory("ai_review_split", 0)).fired;
+    expect(fired?.metadata).toEqual({ confidence: 0.7 });
+    expect(Object.hasOwn(fired?.metadata ?? {}, "diff")).toBe(false);
+  });
+
+  it("stores a non-diff code's own rendered detail as rawSignal — the signal its detection actually evaluated", async () => {
+    const env = createTestEnv();
+    await recordConfiguredGateBlockerSignals(
+      env,
+      advisory([finding({ code: "missing_linked_issue", detail: "No open linked issue found via Closes #N." })]),
+      blockLinked,
+      "owner/repo",
+      7,
+      "some diff that must NOT be attached to a non-diff code",
+    );
+    const [fired] = (await createSignalStore(env).queryRuleHistory("missing_linked_issue", 0)).fired;
+    const metadata = fired?.metadata as Record<string, string>;
+    expect(metadata.rawSignal).toBe("No open linked issue found via Closes #N.");
+    expect(Object.hasOwn(metadata, "diff")).toBe(false);
+  });
+
+  it("SECURITY: secret_leak's fired event NEVER carries diff or other raw content, even when confidence is present", async () => {
+    const env = createTestEnv();
+    await recordConfiguredGateBlockerSignals(
+      env,
+      advisory([finding({ code: "secret_leak", severity: "critical", confidence: 0.99, detail: "AKIA... leaked in src/config.ts" })]),
+      {},
+      "owner/repo",
+      7,
+      "diff containing AKIAIOSFODNN7EXAMPLE",
+    );
+    const [fired] = (await createSignalStore(env).queryRuleHistory("secret_leak", 0)).fired;
+    expect(fired?.metadata).toEqual({ confidence: 0.99 });
+    expect(Object.hasOwn(fired?.metadata ?? {}, "diff")).toBe(false);
+    expect(Object.hasOwn(fired?.metadata ?? {}, "rawSignal")).toBe(false);
+    expect(JSON.stringify(fired)).not.toContain("AKIA");
+  });
+
+  it("SECURITY: secret_leak with no confidence records NO metadata at all — the omit-empty discipline holds", async () => {
+    const env = createTestEnv();
+    await recordConfiguredGateBlockerSignals(
+      env,
+      advisory([finding({ code: "secret_leak", severity: "critical", detail: "credential material" })]),
+      {},
+      "owner/repo",
+      7,
+      "raw diff",
+    );
+    const [fired] = (await createSignalStore(env).queryRuleHistory("secret_leak", 0)).fired;
+    expect(fired).toBeDefined();
+    expect(Object.hasOwn(fired ?? {}, "metadata")).toBe(false);
+  });
+
+  it("pins the exclusion and diff-evaluating sets — secret_leak excluded; exactly the audited codes are diff-evaluating", () => {
+    expect([...RAW_CONTEXT_EXCLUDED_CODES]).toEqual(["secret_leak"]);
+    expect([...DIFF_EVALUATING_BLOCKER_CODES].sort()).toEqual(["ai_consensus_defect", "ai_review_split", "lockfile_tamper_risk"]);
   });
 });
