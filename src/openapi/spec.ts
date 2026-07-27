@@ -59,6 +59,9 @@ import {
   MaintainerLaneReportSchema,
   MaintainerNoiseReportSchema,
   AmsMinerCohortComparisonSchema,
+  GatePrecisionResponseSchema,
+  OutcomeCalibrationResponseSchema,
+  ActivationPreviewResponseSchema,
   McpCompatibilitySchema,
   PullRequestAiReviewFindingsSchema,
   PullRequestMaintainerPacketSchema,
@@ -197,6 +200,9 @@ export function buildOpenApiSpec() {
   registry.register("ContributorRewardRiskStrategy", ContributorRewardRiskStrategySchema);
   registry.register("MaintainerNoiseReport", MaintainerNoiseReportSchema);
   registry.register("AmsMinerCohortComparison", AmsMinerCohortComparisonSchema);
+  registry.register("GatePrecisionResponse", GatePrecisionResponseSchema);
+  registry.register("OutcomeCalibrationResponse", OutcomeCalibrationResponseSchema);
+  registry.register("ActivationPreviewResponse", ActivationPreviewResponseSchema);
   registry.register("PullRequestReviewability", PullRequestReviewabilitySchema);
   registry.register("PullRequestAiReviewFindings", PullRequestAiReviewFindingsSchema);
 
@@ -514,6 +520,64 @@ export function buildOpenApiSpec() {
         description: "Effective TunableOverride values (confidenceFloor / scopeCap.files / scopeCap.lines) with a shadowPending flag — never the raw override_audit history",
         content: { "application/json": { schema: GateConfigEffectiveResponseSchema } },
       },
+      401: { description: "Missing or invalid static protected API token" },
+      403: { description: "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo" },
+    },
+  });
+  // #9302: five maintainer-report GET routes sharing the same owner/repo params and maintainer-only auth
+  // boundary (401/403) as gate-config/effective above. maintainer-noise/ams-miner-cohort reuse their
+  // already-registered component schemas; the other three use the #9302 response schemas added above.
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/maintainer-noise",
+    summary: "Maintainer review-noise report for a repo",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "Maintainer-facing review-noise metrics for the repo", content: { "application/json": { schema: MaintainerNoiseReportSchema } } },
+      401: { description: "Missing or invalid static protected API token" },
+      403: { description: "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/ams-miner-cohort",
+    summary: "AMS vs human miner cohort comparison for a repo",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "AMS-miner vs human-miner review-outcome cohort comparison over the window", content: { "application/json": { schema: AmsMinerCohortComparisonSchema } } },
+      401: { description: "Missing or invalid static protected API token" },
+      403: { description: "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/gate-precision",
+    summary: "Gate precision report for a repo",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "Per-gate-type and overall gate precision over the window", content: { "application/json": { schema: GatePrecisionResponseSchema } } },
+      401: { description: "Missing or invalid static protected API token" },
+      403: { description: "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/outcome-calibration",
+    summary: "Outcome calibration (maintainer measurement) report for a repo",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "Slop/recommendation calibration report over the window", content: { "application/json": { schema: OutcomeCalibrationResponseSchema } } },
+      401: { description: "Missing or invalid static protected API token" },
+      403: { description: "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo" },
+    },
+  });
+  registry.registerPath({
+    method: "get",
+    path: "/v1/repos/{owner}/{repo}/activation-preview",
+    summary: "AI-review activation preview for a repo",
+    request: { params: z.object({ owner: z.string(), repo: z.string() }) },
+    responses: {
+      200: { description: "Preview of what enabling AI review would surface for the repo", content: { "application/json": { schema: ActivationPreviewResponseSchema } } },
       401: { description: "Missing or invalid static protected API token" },
       403: { description: "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo" },
     },

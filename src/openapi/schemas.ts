@@ -3001,6 +3001,47 @@ export const AmsMinerCohortComparisonSchema = z
   })
   .openapi("AmsMinerCohortComparison");
 
+// #9302: response shapes for three more maintainer-report GET routes. Field names/types mirror the MCP
+// outputSchemas the same data is validated against in src/mcp/server.ts (gatePrecisionOutputSchema /
+// maintainerMeasurementReportOutputSchema / activationPreviewOutputSchema).
+export const GatePrecisionResponseSchema = z
+  .object({
+    repoFullName: z.string().optional(),
+    generatedAt: z.string().optional(),
+    windowDays: z.number().nullable().optional(),
+    perGateType: z.array(z.unknown()).optional(),
+    overall: z.unknown().optional(),
+    signals: z.array(z.string()).optional(),
+  })
+  .openapi("GatePrecisionResponse");
+
+export const OutcomeCalibrationResponseSchema = z
+  .object({
+    repoFullName: z.string().optional(),
+    generatedAt: z.string().optional(),
+    windowDays: z.number().nullable().optional(),
+    slop: z.unknown().optional(),
+    recommendations: z.unknown().optional(),
+    signals: z.array(z.string()).optional(),
+    status: z.string().optional(),
+  })
+  .openapi("OutcomeCalibrationResponse");
+
+export const ActivationPreviewResponseSchema = z
+  .object({
+    repoFullName: z.string().optional(),
+    generatedAt: z.string().optional(),
+    currentReviewCheckMode: z.string().optional(),
+    aiReviewConfigured: z.boolean().optional(),
+    evaluatedCount: z.number().optional(),
+    withFindingsCount: z.number().optional(),
+    findingCodeCounts: z.array(z.unknown()).optional(),
+    samples: z.array(z.unknown()).optional(),
+    recommendedAction: z.string().nullable().optional(),
+    summary: z.string().optional(),
+  })
+  .openapi("ActivationPreviewResponse");
+
 export const PullRequestReviewabilitySchema = z
   .object({
     repoFullName: z.string(),

@@ -14652,80 +14652,6 @@
           "privateSummary"
         ]
       },
-      "PullRequestAiReviewFindings": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": [
-              "ready",
-              "not_found",
-              "ai_review_off"
-            ]
-          },
-          "repoFullName": {
-            "type": "string"
-          },
-          "pullNumber": {
-            "type": "number"
-          },
-          "login": {
-            "type": "string"
-          },
-          "headSha": {
-            "type": "string",
-            "nullable": true
-          },
-          "findings": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "category": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "severity": {
-                  "type": "string",
-                  "enum": [
-                    "blocker",
-                    "nit"
-                  ]
-                },
-                "line": {
-                  "type": "number"
-                },
-                "body": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "category",
-                "path",
-                "severity",
-                "line",
-                "body"
-              ]
-            }
-          },
-          "categoryCounts": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number"
-            }
-          }
-        },
-        "required": [
-          "status",
-          "repoFullName",
-          "pullNumber",
-          "login",
-          "findings",
-          "categoryCounts"
-        ]
-      },
       "FindingTaxonomyDocument": {
         "type": "object",
         "properties": {
@@ -15331,6 +15257,108 @@
           "ok"
         ]
       },
+      "GatePrecisionResponse": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "windowDays": {
+            "type": "number",
+            "nullable": true
+          },
+          "perGateType": {
+            "type": "array",
+            "items": {
+              "nullable": true
+            }
+          },
+          "overall": {
+            "nullable": true
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "OutcomeCalibrationResponse": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "windowDays": {
+            "type": "number",
+            "nullable": true
+          },
+          "slop": {
+            "nullable": true
+          },
+          "recommendations": {
+            "nullable": true
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ActivationPreviewResponse": {
+        "type": "object",
+        "properties": {
+          "repoFullName": {
+            "type": "string"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "currentReviewCheckMode": {
+            "type": "string"
+          },
+          "aiReviewConfigured": {
+            "type": "boolean"
+          },
+          "evaluatedCount": {
+            "type": "number"
+          },
+          "withFindingsCount": {
+            "type": "number"
+          },
+          "findingCodeCounts": {
+            "type": "array",
+            "items": {
+              "nullable": true
+            }
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "nullable": true
+            }
+          },
+          "recommendedAction": {
+            "type": "string",
+            "nullable": true
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
       "EligibilityPlanResponse": {
         "type": "object",
         "properties": {
@@ -15386,6 +15414,80 @@
             "nullable": true
           }
         }
+      },
+      "PullRequestAiReviewFindings": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "not_found",
+              "ai_review_off"
+            ]
+          },
+          "repoFullName": {
+            "type": "string"
+          },
+          "pullNumber": {
+            "type": "number"
+          },
+          "login": {
+            "type": "string"
+          },
+          "headSha": {
+            "type": "string",
+            "nullable": true
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "blocker",
+                    "nit"
+                  ]
+                },
+                "line": {
+                  "type": "number"
+                },
+                "body": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "category",
+                "path",
+                "severity",
+                "line",
+                "body"
+              ]
+            }
+          },
+          "categoryCounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "status",
+          "repoFullName",
+          "pullNumber",
+          "login",
+          "findings",
+          "categoryCounts"
+        ]
       }
     },
     "parameters": {},
@@ -17568,77 +17670,6 @@
                 }
               }
             }
-          }
-        },
-        "security": [
-          {
-            "LoopOverBearer": []
-          },
-          {
-            "LoopOverSessionCookie": []
-          }
-        ]
-      }
-    },
-    "/v1/repos/{owner}/{repo}/pulls/{number}/ai-review-findings": {
-      "get": {
-        "summary": "A PR author's own structured, published AI-review findings",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "owner",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "repo",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "number",
-            "in": "path"
-          },
-          {
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "example": "jsonbored"
-            },
-            "required": true,
-            "description": "GitHub login of the pull request's author -- the caller must be this same login.",
-            "name": "login",
-            "in": "query"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Structured, published AI-review findings for the caller's own pull request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PullRequestAiReviewFindings"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Missing login"
-          },
-          "403": {
-            "description": "The pull request belongs to a different contributor"
-          },
-          "404": {
-            "description": "Pull request not found"
           }
         },
         "security": [
@@ -20224,6 +20255,251 @@
         ]
       }
     },
+    "/v1/repos/{owner}/{repo}/maintainer-noise": {
+      "get": {
+        "summary": "Maintainer review-noise report for a repo",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Maintainer-facing review-noise metrics for the repo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaintainerNoiseReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid static protected API token"
+          },
+          "403": {
+            "description": "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/ams-miner-cohort": {
+      "get": {
+        "summary": "AMS vs human miner cohort comparison for a repo",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AMS-miner vs human-miner review-outcome cohort comparison over the window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmsMinerCohortComparison"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid static protected API token"
+          },
+          "403": {
+            "description": "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/gate-precision": {
+      "get": {
+        "summary": "Gate precision report for a repo",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-gate-type and overall gate precision over the window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatePrecisionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid static protected API token"
+          },
+          "403": {
+            "description": "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/outcome-calibration": {
+      "get": {
+        "summary": "Outcome calibration (maintainer measurement) report for a repo",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Slop/recommendation calibration report over the window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OutcomeCalibrationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid static protected API token"
+          },
+          "403": {
+            "description": "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/activation-preview": {
+      "get": {
+        "summary": "AI-review activation preview for a repo",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Preview of what enabling AI review would surface for the repo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationPreviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid static protected API token"
+          },
+          "403": {
+            "description": "Static mcp credential is outside MCP_READ_REPO_ALLOWLIST for this repo"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
     "/v1/scoring/eligibility-plan": {
       "post": {
         "summary": "Derive a contributor eligibility plan from a scoring preview — REST mirror of loopover_get_eligibility_plan (#9301)",
@@ -20268,6 +20544,77 @@
           },
           "400": {
             "description": "Invalid scoring preview input or missing contributorLogin"
+          }
+        },
+        "security": [
+          {
+            "LoopOverBearer": []
+          },
+          {
+            "LoopOverSessionCookie": []
+          }
+        ]
+      }
+    },
+    "/v1/repos/{owner}/{repo}/pulls/{number}/ai-review-findings": {
+      "get": {
+        "summary": "A PR author's own structured, published AI-review findings",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "number",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "example": "jsonbored"
+            },
+            "required": true,
+            "description": "GitHub login of the pull request's author -- the caller must be this same login.",
+            "name": "login",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Structured, published AI-review findings for the caller's own pull request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullRequestAiReviewFindings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing login"
+          },
+          "403": {
+            "description": "The pull request belongs to a different contributor"
+          },
+          "404": {
+            "description": "Pull request not found"
           }
         },
         "security": [

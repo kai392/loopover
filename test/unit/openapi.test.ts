@@ -94,7 +94,6 @@ describe("OpenAPI contract", () => {
       "/v1/repos/{owner}/{repo}/burden-forecast",
       "/v1/repos/{owner}/{repo}/registry-drift",
       "/v1/repos/{owner}/{repo}/maintainer-lane",
-      "/v1/repos/{owner}/{repo}/maintainer-noise",
       "/v1/repos/{owner}/{repo}/pulls/{number}/review-intelligence",
       "/v1/repos/{owner}/{repo}/pulls/{number}/scoring-preview",
       "/v1/internal/jobs/generate-signal-snapshots/run",
@@ -165,6 +164,28 @@ describe("OpenAPI contract", () => {
         expect(operation.summary?.trim(), `${label} has an empty operation-level summary`).not.toBe("");
       }
     }
+  });
+
+  // #9302: the five maintainer-report GET routes are each live in routes.ts and backed by an MCP tool; they
+  // share the owner/repo params + maintainer-only auth boundary of gate-config/effective. Assert all five are
+  // documented (maintainer-noise/ams-miner-cohort reuse their pre-registered component schemas; the other three
+  // get new #9302 response schemas). maintainer-noise was previously in this file's removed-paths list — that
+  // entry is dropped above now that the route is (re-)documented per its orphaned-but-registered schema.
+  it("documents the five maintainer-report GET routes (#9302)", () => {
+    const spec = buildOpenApiSpec();
+    for (const path of [
+      "/v1/repos/{owner}/{repo}/maintainer-noise",
+      "/v1/repos/{owner}/{repo}/ams-miner-cohort",
+      "/v1/repos/{owner}/{repo}/gate-precision",
+      "/v1/repos/{owner}/{repo}/outcome-calibration",
+      "/v1/repos/{owner}/{repo}/activation-preview",
+    ]) {
+      expect(spec.paths[path]?.get?.responses?.[200]).toBeDefined();
+    }
+    const schemas = spec.components?.schemas ?? {};
+    expect(schemas.GatePrecisionResponse).toBeDefined();
+    expect(schemas.OutcomeCalibrationResponse).toBeDefined();
+    expect(schemas.ActivationPreviewResponse).toBeDefined();
   });
 
   // #9309: the five /v1/loop/* idea/task-graph composer routes are each backed by an MCP tool whose Zod
